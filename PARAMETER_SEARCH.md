@@ -1513,3 +1513,162 @@ soil water availability, compensating for other model limitations.
 ### Files Changed
 
 - `src/swimrs/calibrate/pest_builder.py`: Added irrigation-dependent MAD bounds
+
+## Fix: Bimodal Irrigation Scheduling (2026-02-02)
+
+### Problem
+
+The calibrated Crane S2 model had bimodal irrigation behavior driving the largest errors:
+
+1. **Overestimates (+3 to +5 mm/day):** MAD calibrated to 0.016, so RAW ≈ 1.8 mm. Any
+   depletion triggers irrigation, keeping the soil perpetually full (Ks=1.0). Model predicts
+   6-7 mm/day; flux reads 2-3 mm/day. Concentrated in Jun-Aug on irrigation days.
+
+2. **Underestimates (-4 to -8 mm/day):** When the NDVI-slope-based `irr_flag` turns off
+   (between alfalfa cuttings, plateau/decline phases), irrigation stops entirely. Depletion
+   spirals to 24-86 mm, Ks crashes to 0.06-0.34. Flux still reads 5-8 mm/day.
+   Concentrated in Jul (worst month: bias=-0.64, RMSE=2.11).
+
+### Root Causes
+
+**A. Irrigation window detection misses active growing season periods.** The algorithm in
+`calculator.py:997` requires ≥10 consecutive positive-NDVI-slope days. For alfalfa with
+multiple cuttings, NDVI declines between cuttings (negative slope), closing the window even
+when NDVI is 0.5-0.9 and the crop needs water.
+
+**B. MAD driven to degenerate value (0.016).** With irrigation window gaps, PEST compensates
+by minimizing MAD so that irrigation is maximally aggressive during "on" periods. Lower bound
+of 0.01 permits this.
+
+### Changes
+
+#### 1. NDVI-threshold fallback for `irr_flag` (`src/swimrs/process/input.py`)
+
+In `_write_irrigation_from_container()`, after building `irr_flag` from slope-detected DOYs,
+supplemented with an NDVI-threshold fallback: if interpolated NDVI for a field on a given day
+exceeds 0.3 AND the field is classified as irrigated for that year, set `irr_flag=1`.
+
+This keeps the irrigation window open during inter-cutting NDVI dips (e.g., July 2018 with
+NDVI 0.86-0.91 but irr_flag off). During winter/fallow when NDVI < 0.3, the flag stays off.
+Only years with existing slope-detected irrigation are supplemented, preserving fallow-year
+detection.
+
+#### 2. MAD lower bound raised (`src/swimrs/calibrate/pest_builder.py`)
+
+| Location | Old | New |
+|----------|-----|-----|
+| Global MAD lower bound | 0.01 | 0.10 |
+| Per-field irrigated MAD initial | 0.02 | 0.10 |
+| Per-field irrigated MAD lower bound | 0.01 | 0.10 |
+
+With the window gaps fixed, PEST no longer needs to compensate by driving MAD to near-zero.
+A floor of 0.10 ensures RAW ≥ ~11 mm (for AWC=113), allowing meaningful depletion before
+irrigation triggers. FAO-56 typical MAD is 0.3-0.7, so 0.10 is still generous.
+
+### Results: Crane S2 Calibration
+
+**Phi (objective function) progression:**
+
+| Iteration | Phi |
+|-----------|-----|
+| Initial | 1245.93 |
+| 1 | 163.53 |
+| 2 | 131.47 |
+| 3 | 130.81 |
+
+89.5% reduction, 176 model runs, 0 failures.
+
+**Calibrated MAD:** mean 0.105 (range 0.10-0.14), up from degenerate 0.016.
+
+### Validation Against Flux Tower (Crane S2)
+
+#### Old Results (before fix) — calibration hurt performance
+
+| Metric (Full Series) | Uncalibrated | Calibrated | Change |
+|---------------------|-------------|-----------|--------|
+| R² | 0.665 | 0.662 | **-0.003** |
+| Pearson r | 0.840 | 0.867 | +0.027 |
+| Bias (mm/day) | -0.028 | +0.443 | **+0.471** |
+| RMSE (mm/day) | 1.233 | 1.239 | **+0.006** |
+
+#### New Results (after fix) — calibration now improves performance
+
+| Metric (Full Series) | Uncalibrated | Calibrated | Change |
+|---------------------|-------------|-----------|--------|
+| R² | 0.738 | **0.765** | **+0.027** |
+| Pearson r | 0.881 | **0.893** | **+0.013** |
+| Bias (mm/day) | +0.130 | +0.217 | +0.088 |
+| RMSE (mm/day) | 1.091 | **1.034** | **-0.057** |
+
+#### Calibrated model absolute improvement
+
+| Metric | Old Calibrated | New Calibrated | Improvement |
+|--------|---------------|----------------|-------------|
+| R² (full series) | 0.662 | **0.765** | **+0.103** |
+| R² (capture dates) | 0.641 | **0.823** | **+0.182** |
+| Pearson r (full) | 0.867 | **0.893** | +0.026 |
+| RMSE (full, mm/day) | 1.239 | **1.034** | **-0.205** |
+| RMSE (capture, mm/day) | 1.455 | **1.022** | **-0.433** |
+| Bias (full, mm/day) | +0.443 | **+0.217** | **-0.226** |
+
+#### SWIM vs OpenET (new calibrated)
+
+| Metric (Full Series) | SWIM Calibrated | OpenET Ensemble |
+|---------------------|----------------|-----------------|
+| R² | **0.765** | 0.738 |
+| Pearson r | **0.893** | 0.863 |
+| Bias (mm/day) | +0.217 | **+0.093** |
+| RMSE (mm/day) | **1.034** | 1.091 |
+
+**SWIM now beats OpenET on R², Pearson r, and RMSE** against independent flux tower
+observations. OpenET retains lower absolute bias.
+
+#### Monthly breakdown (calibrated SWIM vs flux)
+
+| Month | N | R² | Bias | RMSE |
+|-------|---|------|------|------|
+| 1 | 155 | 0.097 | -0.051 | 0.396 |
+| 2 | 141 | -0.099 | -0.168 | 0.562 |
+| 3 | 155 | -0.405 | +0.024 | 0.626 |
+| 4 | 150 | 0.167 | -0.423 | 0.895 |
+| 5 | 142 | -0.006 | -0.345 | 1.477 |
+| 6 | 120 | 0.219 | +0.444 | 1.602 |
+| 7 | 124 | -0.062 | +0.279 | 1.552 |
+| 8 | 124 | -0.349 | +0.760 | 1.845 |
+| 9 | 130 | -0.042 | +0.861 | 1.352 |
+| 10 | 155 | -0.600 | +0.211 | 0.627 |
+| 11 | 150 | 0.028 | +0.068 | 0.512 |
+| 12 | 155 | 0.004 | +0.051 | 0.519 |
+
+#### Irrigation and mass balance
+
+| Metric (2004) | Old | New |
+|---------------|-----|-----|
+| Total irrigation | 820.6 mm | 696.3 mm |
+| Total ET | 886.7 mm | 769.0 mm |
+| Mass balance error | 0.13% | 0.05% |
+
+### Key Findings
+
+1. **Calibration now helps instead of hurting.** Old: R² dropped by 0.003 and RMSE
+   increased. New: R² improves by +0.027 and RMSE drops by 0.057.
+
+2. **Irrigation window is the primary driver.** The NDVI-threshold fallback eliminated
+   the gap periods where irrigation was incorrectly suppressed, which was the root cause
+   of the bimodal error pattern.
+
+3. **MAD floor prevents degenerate solutions.** With continuous irrigation windows, PEST
+   no longer needs to drive MAD to near-zero. The 0.10 floor forces physically meaningful
+   depletion thresholds while still allowing aggressive irrigation scheduling.
+
+4. **Irrigation volume reduced 15%.** From 821 to 696 mm in 2004 — the model no longer
+   over-irrigates during "on" periods because MAD allows some depletion before triggering.
+
+5. **Remaining issues.** July and August still show positive bias (+0.28, +0.76 mm/day)
+   and negative R². These months have the highest atmospheric demand and may require
+   further investigation of Ke/Kr dynamics or ETo bias.
+
+### Files Changed
+
+- `src/swimrs/process/input.py`: NDVI-threshold fallback in `_write_irrigation_from_container()`
+- `src/swimrs/calibrate/pest_builder.py`: MAD lower bound 0.01 → 0.10 (global and per-field irrigated)

@@ -68,6 +68,7 @@ markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
   - admonition
+  - pymdownx.details
   - toc:
       permalink: true
 
