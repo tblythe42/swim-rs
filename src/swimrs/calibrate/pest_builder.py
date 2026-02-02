@@ -7,6 +7,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# pyemu is not yet compatible with pandas 3.0 Arrow-backed StringDtype;
+# disable it so string columns stay as object dtype.
+pd.options.future.infer_string = False
+
 # Suppress pyemu's flopy warning - flopy is optional and not needed for SWIM-RS
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message="Failed to import legacy module")
@@ -132,7 +136,7 @@ class PestBuilder:
         """Initialize container from instance or path."""
         from swimrs.container import SwimContainer
 
-        if isinstance(container, (str, Path)):
+        if isinstance(container, str | Path):
             self._container_path = Path(container)
             self._container = SwimContainer.open(self._container_path, mode="r")
             self._owns_container = True
@@ -752,10 +756,10 @@ if __name__ == "__main__":
                     )
                     localizer.loc[idx, cols] = 1.0
 
-        vals = localizer.values
+        vals = localizer.values.copy()
         vals[np.isnan(vals)] = 0.0
         vals[vals < 1.0] = 0.0
-        localizer.loc[localizer.index, localizer.columns] = vals.copy()
+        localizer.loc[localizer.index, localizer.columns] = vals
         mat_file = os.path.join(os.path.dirname(self.pst_file), "loc.mat")
 
         col_sums = {col: int(localizer[col].sum()) for col in localizer.columns}
@@ -803,7 +807,7 @@ if __name__ == "__main__":
                 # 'aw' and 'zr' are applied by Tracker.load_soils and load_root_depth
                 "aw": {
                     "file": self.params_file,
-                    "std": 50.0,
+                    "std": 100.0,
                     "initial_value": None,
                     "lower_bound": 100.0,
                     "upper_bound": 400.0,
@@ -841,9 +845,9 @@ if __name__ == "__main__":
                 "ndvi_k": {
                     "file": self.params_file,
                     "std": 1.0,
-                    "initial_value": 7.0,
+                    "initial_value": 10.0,
                     "lower_bound": 3.0,
-                    "upper_bound": 10.0,
+                    "upper_bound": 20.0,
                     "pargp": "ndvi_k",
                     "index_cols": 0,
                     "use_cols": 1,
@@ -854,7 +858,7 @@ if __name__ == "__main__":
                     "std": 0.15,
                     "initial_value": 0.55,
                     "lower_bound": 0.1,
-                    "upper_bound": 0.85,
+                    "upper_bound": 0.80,
                     "pargp": "ndvi_0",
                     "index_cols": 0,
                     "use_cols": 1,
@@ -1061,12 +1065,15 @@ if __name__ == "__main__":
             d = self.pest.obs_dfs[j + count].copy()
             d["weight"] = 0.0
 
-            # TODO: adjust as needed for phi visibility of etf vs. swe
+            # Weight SWE by inverse magnitude, scaled so SWE contributes
+            # ~10-20% of total phi alongside magnitude-weighted ETf.
             try:
-                d.loc[valid, "weight"] = 1 / 1000.0
+                swe_obs = d.loc[valid, "obsval"].values.astype(float)
+                d.loc[valid, "weight"] = 1.0 / (26.0 * (swe_obs + 10.0))
             except KeyError:
                 valid = [v.lower() for v in valid.values]
-                d.loc[valid, "weight"] = 1 / 1000.0
+                swe_obs = d.loc[valid, "obsval"].values.astype(float)
+                d.loc[valid, "weight"] = 1.0 / (26.0 * (swe_obs + 10.0))
 
             d.loc[np.isnan(d["obsval"]), "weight"] = 0.0
             d.loc[np.isnan(d["obsval"]), "obsval"] = -99.0

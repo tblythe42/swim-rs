@@ -49,9 +49,9 @@ from swimrs.swim.config import ProjectConfig
 
 def load_config():
     """Load project configuration."""
-    config_file = os.path.join(PROJECT_DIR, "3_Crane.toml")
+    config_file = os.path.join(SCRIPT_DIR, "3_Crane.toml")
     cfg = ProjectConfig()
-    cfg.read_config(config_file, project_root_override=PROJECT_DIR)
+    cfg.read_config(config_file, project_root_override=SCRIPT_DIR)
     return cfg
 
 
@@ -233,7 +233,7 @@ def main():
     print(f"Date range: {cfg.start_dt} to {cfg.end_dt}")
 
     # Open container
-    container_path = os.path.join(SCRIPT_DIR, f"{cfg.project_name}.swim")
+    container_path = cfg.container_path
     if not os.path.exists(container_path):
         print(f"\nError: Container not found at {container_path}")
         print("Run build_inputs.py first to create the container.")
@@ -245,7 +245,7 @@ def main():
     try:
         if not args.skip_build:
             # Export observations
-            export_observations(container, PROJECT_DIR, etf_model=cfg.etf_target_model)
+            export_observations(container, SCRIPT_DIR, etf_model=cfg.etf_target_model)
 
             # Build PEST++ setup
             builder = build_pest_setup(cfg, container, python_script=args.python_script)
