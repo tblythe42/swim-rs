@@ -1111,6 +1111,47 @@ def _write_irrigation_from_container(
                 except (ValueError, OverflowError):
                     continue
 
+    # Supplement irr_flag with NDVI-threshold fallback for irrigated years.
+    # The slope-based window detection can miss plateau/decline phases
+    # (e.g., between alfalfa cuttings). If NDVI > threshold and the field
+    # is irrigated that year, keep the irrigation window open.
+    NDVI_IRR_THRESHOLD = 0.3
+    ts = container_data.get("time_series")
+    if ts is not None:
+        ndvi_var = None
+        for var in ["ndvi_irr", "ndvi_inv_irr"]:
+            if var in ts:
+                ndvi_var = var
+                break
+
+        if ndvi_var is not None:
+            ndvi_vals = ts[ndvi_var].values
+
+            for fid_idx, fid in enumerate(fids):
+                if fid not in irr_data:
+                    continue
+
+                fid_irr = irr_data[fid]
+                irr_years = set()
+                for year_str, year_data in fid_irr.items():
+                    if year_str == "fallow_years" or not isinstance(year_data, dict):
+                        continue
+                    if year_data.get("irr_doys"):
+                        irr_years.add(int(year_str))
+
+                if not irr_years:
+                    continue
+
+                for day_idx in range(n_days):
+                    if irr_flag[day_idx, fid_idx]:
+                        continue
+                    date = start_date + pd.Timedelta(days=day_idx)
+                    if date.year not in irr_years:
+                        continue
+                    ndvi_val = ndvi_vals[day_idx, fid_idx]
+                    if np.isfinite(ndvi_val) and ndvi_val > NDVI_IRR_THRESHOLD:
+                        irr_flag[day_idx, fid_idx] = 1
+
     irr_group.create_dataset("irr_flag", data=irr_flag, compression="gzip")
 
 

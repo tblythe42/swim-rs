@@ -389,7 +389,8 @@ class ProjectConfig:
                 only parameters containing these site IDs will be loaded.
 
         Raises:
-            FileNotFoundError: If the initial values CSV doesn't exist.
+            FileNotFoundError: If the initial values CSV doesn't exist and
+                ``require=True`` (the default when called directly).
         """
         self.calibrate = True
 
@@ -399,6 +400,14 @@ class ProjectConfig:
         initial_values_csv_path = self.initial_values_csv
         if not os.path.isabs(initial_values_csv_path) and self.project_ws:
             initial_values_csv_path = os.path.join(self.project_ws, initial_values_csv_path)
+
+        if not os.path.exists(initial_values_csv_path):
+            # params.csv is created by PestBuilder; skip loading when it
+            # doesn't exist yet (e.g. first calibration build).
+            self.calibrated_parameters = None
+            self.calibration_files = {}
+            return
+
         param_init = pd.read_csv(initial_values_csv_path, index_col=0)
         if sites:
             applicable_params = []

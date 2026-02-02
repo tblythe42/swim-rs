@@ -320,12 +320,12 @@ class PestBuilder:
                             except Exception:
                                 continue
                         irr = float(np.nanmean(irr_vals)) if irr_vals else 0.0
-                    # Irrigation-dependent initial value AND bounds (see PARAMETER_SEARCH.md):
-                    # - Irrigated: low MAD (0.02), trigger irrigation early, bounds [0.01, 0.3]
+                    # Irrigation-dependent initial value AND bounds:
+                    # - Irrigated: low MAD (0.10), trigger irrigation early, bounds [0.10, 0.3]
                     # - Non-irrigated: high MAD (0.5), tolerate depletion, bounds [0.3, 0.8]
                     if irr > 0.2:
-                        params.append((k, 0.02, f"p_{k}_0_constant.csv"))
-                        pars[k]["lower_bound"] = 0.01
+                        params.append((k, 0.10, f"p_{k}_0_constant.csv"))
+                        pars[k]["lower_bound"] = 0.10
                         pars[k]["upper_bound"] = 0.3
                     else:
                         params.append((k, 0.5, f"p_{k}_0_constant.csv"))
@@ -869,7 +869,7 @@ if __name__ == "__main__":
                     "file": self.params_file,
                     "std": 0.15,
                     "initial_value": None,
-                    "lower_bound": 0.01,
+                    "lower_bound": 0.10,
                     "upper_bound": 0.9,
                     "pargp": "mad",
                     "index_cols": 0,
