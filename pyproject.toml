@@ -116,3 +116,10 @@ filterwarnings = [
     "ignore::DeprecationWarning",
 ]
 addopts = "-v --tb=short"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+    "kaleido>=1.2.0",
+    "nbconvert>=7.17.0",
+]
