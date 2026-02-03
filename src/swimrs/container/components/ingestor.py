@@ -7,6 +7,7 @@ Usage: container.ingest.ndvi(...) instead of container.ingest_ee_ndvi(...)
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,93 @@ if TYPE_CHECKING:
     from swimrs.container.components.grid_mapping import GridMapping
     from swimrs.container.provenance import ProvenanceEvent
     from swimrs.container.state import ContainerState
+
+
+def _parse_single_csv(
+    csv_file: Path,
+    uid_column: str,
+    instrument: str,
+    known_uids: set[str],
+    fields_set: set[str] | None,
+) -> list[pd.Series]:
+    """Parse one Earth Engine CSV into a list of per-field Series.
+
+    This is a module-level function so it can be dispatched to threads
+    without serialising the entire Ingestor instance.
+
+    Args:
+        csv_file: Path to a single CSV.
+        uid_column: Expected column name for the field UID.
+        instrument: ``"landsat"`` or ``"sentinel"`` (controls date parsing).
+        known_uids: Set of field UIDs present in the container.
+        fields_set: Optional allowlist; ``None`` means accept all known UIDs.
+
+    Returns:
+        List of ``pd.Series`` (may be empty if the file is irrelevant).
+    """
+    try:
+        df = pd.read_csv(csv_file)
+    except Exception:
+        return []
+
+    # Handle single-field CSVs where field ID is the first column header
+    if uid_column not in df.columns:
+        first_col = df.columns[0]
+        if first_col in known_uids:
+            field_id = first_col
+            new_cols = [uid_column] + list(df.columns[1:])
+            df.columns = new_cols
+            df[uid_column] = df[uid_column].astype(object)
+            df.iloc[0, 0] = field_id
+        else:
+            return []
+
+    # Parse date columns
+    non_data_cols = {uid_column, "system:index", ".geo", "lat", "lon", "LAT", "LON"}
+    data_cols = []
+    dates = []
+
+    for col in df.columns:
+        if col in non_data_cols:
+            continue
+        try:
+            if instrument == "landsat":
+                parts = col.split("_")
+                if len(parts) >= 2:
+                    date_str = parts[-1]
+                    if len(date_str) == 8 and date_str.isdigit():
+                        dates.append(pd.to_datetime(date_str))
+                        data_cols.append(col)
+            elif instrument == "sentinel":
+                date_str = col[:8]
+                if len(date_str) == 8 and date_str.isdigit():
+                    dates.append(pd.to_datetime(date_str))
+                    data_cols.append(col)
+        except Exception:
+            continue
+
+    if not data_cols:
+        return []
+
+    series_list = []
+    for _, row in df.iterrows():
+        field_id = str(row[uid_column])
+
+        if fields_set and field_id not in fields_set:
+            continue
+        if field_id not in known_uids:
+            continue
+
+        values = row[data_cols].values
+        series = pd.Series(values, index=dates, name=field_id)
+        series = series.sort_index()
+
+        if series.index.duplicated().any():
+            series = series.groupby(series.index).max()
+
+        series_list.append(series)
+
+    return series_list
 
 
 class Ingestor(Component):
@@ -59,6 +147,7 @@ class Ingestor(Component):
         overwrite: bool = False,
         min_ndvi: float = 0.05,
         apply_consecutive_filter: bool = True,
+        workers: int = 1,
     ) -> ProvenanceEvent:
         """
         Ingest NDVI data from Earth Engine CSV exports.
@@ -72,6 +161,7 @@ class Ingestor(Component):
             overwrite: If True, replace existing data
             min_ndvi: Minimum valid NDVI value (default: 0.05)
             apply_consecutive_filter: Remove lower of consecutive-day observations
+            workers: Number of threads for parallel CSV reading (default: 1)
 
         Returns:
             ProvenanceEvent recording the operation
@@ -93,7 +183,13 @@ class Ingestor(Component):
 
             # Parse all CSVs into unified DataFrame
             all_data = self._parse_ee_remote_sensing_csvs(
-                source_dir, instrument, "ndvi", uid_column, fields, mask=mask
+                source_dir,
+                instrument,
+                "ndvi",
+                uid_column,
+                fields,
+                mask=mask,
+                workers=workers,
             )
 
             if all_data.empty:
@@ -147,6 +243,7 @@ class Ingestor(Component):
         fields: list[str] | None = None,
         overwrite: bool = False,
         min_etf: float = 0.05,
+        workers: int = 1,
     ) -> ProvenanceEvent:
         """
         Ingest ET fraction data from Earth Engine CSV exports.
@@ -161,6 +258,7 @@ class Ingestor(Component):
             overwrite: If True, replace existing data
             min_etf: Minimum valid ETf value (default: 0.05). Values below
                 this are treated as noise/artifacts and set to NaN.
+            workers: Number of threads for parallel CSV reading (default: 1)
 
         Returns:
             ProvenanceEvent recording the operation
@@ -183,7 +281,13 @@ class Ingestor(Component):
 
             # Parse all CSVs into unified DataFrame
             all_data = self._parse_ee_remote_sensing_csvs(
-                source_dir, instrument, "etf", uid_column, fields, mask=mask
+                source_dir,
+                instrument,
+                "etf",
+                uid_column,
+                fields,
+                mask=mask,
+                workers=workers,
             )
 
             if all_data.empty:
@@ -285,7 +389,7 @@ class Ingestor(Component):
                 mapping = GridMapping.from_shapefile(
                     grid_shapefile, uid_column, grid_column, source_name="gridmet"
                 )
-            elif isinstance(grid_mapping, (str, Path)):
+            elif isinstance(grid_mapping, str | Path):
                 mapping = GridMapping.from_json(grid_mapping, source_name="gridmet")
             elif isinstance(grid_mapping, dict):
                 mapping = GridMapping(grid_mapping, source_name="gridmet")
@@ -742,6 +846,7 @@ class Ingestor(Component):
         uid_column: str,
         fields: list[str] | None = None,
         mask: str | None = None,
+        workers: int = 1,
     ) -> pd.DataFrame:
         """
         Parse Earth Engine CSV exports into a unified DataFrame.
@@ -762,6 +867,7 @@ class Ingestor(Component):
             uid_column: Column name for field UID in CSVs
             fields: Optional list of field UIDs to process
             mask: Optional mask type to filter files ("irr", "inv_irr", "no_mask")
+            workers: Number of threads for parallel CSV reading (default: 1)
 
         Returns:
             DataFrame with DatetimeIndex and field UIDs as columns
@@ -773,137 +879,39 @@ class Ingestor(Component):
 
         # Filter files by mask if specified
         if mask is not None:
-            # Match files that contain the mask pattern in the filename
-            # File naming conventions vary:
-            #   - ndvi_{year}_{mask}.csv (e.g., ndvi_2020_irr.csv)
-            #   - ndvi_{field}_{mask}_{year}.csv (e.g., ndvi_US-FPe_irr_2020.csv)
-            #   - {model}_etf_{field}_{mask}_{year}.csv
-            # Handle "irr" vs "inv_irr" - "inv_irr" should NOT match mask="irr"
-            filtered_files = []
-            for f in csv_files:
-                filename = f.stem  # filename without extension
-                # Check for mask at end of filename (_irr) or in middle (_irr_)
-                if mask == "irr":
-                    # Match _irr at end or _irr_ in middle, but exclude inv_irr
-                    has_irr = filename.endswith("_irr") or "_irr_" in filename
-                    has_inv_irr = "inv_irr" in filename
-                    if has_irr and not has_inv_irr:
-                        filtered_files.append(f)
-                elif mask == "inv_irr":
-                    # Match _inv_irr at end or _inv_irr_ in middle
-                    if filename.endswith("_inv_irr") or "_inv_irr_" in filename:
-                        filtered_files.append(f)
-                elif mask == "no_mask":
-                    # Match _no_mask at end or _no_mask_ in middle
-                    if filename.endswith("_no_mask") or "_no_mask_" in filename:
-                        filtered_files.append(f)
-                else:
-                    # Generic mask pattern
-                    if filename.endswith(f"_{mask}") or f"_{mask}_" in filename:
-                        filtered_files.append(f)
-            csv_files = filtered_files
-
+            csv_files = self._filter_files_by_mask(csv_files, mask)
             if not csv_files:
                 self._log.debug("no_files_for_mask", mask=mask, directory=str(source_dir))
                 return pd.DataFrame()
 
-        all_series = []
-        fields_found = set()
+        known_uids = set(self._state._uid_to_index.keys())
+        fields_set = set(fields) if fields else None
 
-        for csv_file in csv_files:
-            try:
-                df = pd.read_csv(csv_file)
-            except Exception as e:
-                self._log.debug("csv_parse_error", file=str(csv_file), error=str(e))
-                continue
-
-            # Handle single-field CSVs where field ID is the first column header
-            # Format: field_id, date1, date2, ...
-            #         (empty), val1, val2, ...
-            # Convert to standard format by renaming first column and setting field ID as row value
-            if uid_column not in df.columns:
-                first_col = df.columns[0]
-                # Check if first column header is a known field ID
-                if first_col in self._state._uid_to_index:
-                    # This is a single-field sparse CSV - convert to standard format
-                    field_id = first_col
-                    new_cols = [uid_column] + list(df.columns[1:])
-                    df.columns = new_cols
-                    # Cast first column to object dtype before assigning string
-                    df[uid_column] = df[uid_column].astype(object)
-                    df.iloc[0, 0] = field_id
-                    self._log.debug("converted_sparse_csv", file=str(csv_file), field_id=field_id)
-                else:
-                    self._log.warning(
-                        "uid_column_missing",
-                        file=str(csv_file),
-                        uid_column=uid_column,
-                        available_columns=list(df.columns[:5]),
-                    )
-                    continue
-
-            # Parse data columns (those with dates in the column name) - do once per file
-            data_cols = []
-            dates = []
-            non_data_cols = {uid_column, "system:index", ".geo", "lat", "lon", "LAT", "LON"}
-
-            for col in df.columns:
-                if col in non_data_cols:
-                    continue
-
-                try:
-                    if instrument == "landsat":
-                        # Format: PARAM_YYYYMMDD (e.g., NDVI_20170115)
-                        parts = col.split("_")
-                        if len(parts) >= 2:
-                            date_str = parts[-1]
-                            if len(date_str) == 8 and date_str.isdigit():
-                                dates.append(pd.to_datetime(date_str))
-                                data_cols.append(col)
-                    elif instrument == "sentinel":
-                        # Format: YYYYMMDD... (e.g., 20170115_S2A)
-                        date_str = col[:8]
-                        if len(date_str) == 8 and date_str.isdigit():
-                            dates.append(pd.to_datetime(date_str))
-                            data_cols.append(col)
-                except Exception:
-                    continue
-
-            if not data_cols:
-                self._log.warning(
-                    "no_date_columns_found", file=str(csv_file), sample_columns=list(df.columns[:5])
+        # Parse CSVs — serial or threaded
+        if workers <= 1:
+            all_series = []
+            for csv_file in csv_files:
+                all_series.extend(
+                    _parse_single_csv(csv_file, uid_column, instrument, known_uids, fields_set)
                 )
-                continue
-
-            # Iterate over all rows (each row is a field)
-            for _, row in df.iterrows():
-                field_id = str(row[uid_column])
-
-                # Filter by requested fields
-                if fields and field_id not in fields:
-                    continue
-
-                # Skip if field not in container
-                if field_id not in self._state._uid_to_index:
-                    continue
-
-                fields_found.add(field_id)
-
-                # Extract values for this row and create series
-                values = row[data_cols].values
-                series = pd.Series(values, index=dates, name=field_id)
-                series = series.sort_index()
-
-                # Remove duplicates by taking the max value
-                if series.index.duplicated().any():
-                    series = series.groupby(series.index).max()
-
-                all_series.append(series)
+        else:
+            all_series = []
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(
+                        _parse_single_csv, csv_file, uid_column, instrument, known_uids, fields_set
+                    ): csv_file
+                    for csv_file in csv_files
+                }
+                for future in as_completed(futures):
+                    try:
+                        all_series.extend(future.result())
+                    except Exception as e:
+                        self._log.debug("csv_parse_error", file=str(futures[future]), error=str(e))
 
         if not all_series:
             self._log.warning(
                 "no_series_created",
-                fields_found=list(fields_found),
                 container_fields_sample=list(self._state._uid_to_index.keys())[:5],
             )
             return pd.DataFrame()
@@ -936,6 +944,28 @@ class Ingestor(Component):
             result.index = pd.DatetimeIndex(result.index)
 
         return result
+
+    @staticmethod
+    def _filter_files_by_mask(csv_files: list[Path], mask: str) -> list[Path]:
+        """Filter CSV file list by mask pattern in filename."""
+        filtered = []
+        for f in csv_files:
+            filename = f.stem
+            if mask == "irr":
+                has_irr = filename.endswith("_irr") or "_irr_" in filename
+                has_inv_irr = "inv_irr" in filename
+                if has_irr and not has_inv_irr:
+                    filtered.append(f)
+            elif mask == "inv_irr":
+                if filename.endswith("_inv_irr") or "_inv_irr_" in filename:
+                    filtered.append(f)
+            elif mask == "no_mask":
+                if filename.endswith("_no_mask") or "_no_mask_" in filename:
+                    filtered.append(f)
+            else:
+                if filename.endswith(f"_{mask}") or f"_{mask}_" in filename:
+                    filtered.append(f)
+        return filtered
 
     def _apply_ndvi_filters(
         self,
@@ -1013,17 +1043,20 @@ class Ingestor(Component):
         # Reindex data to container time index
         aligned = data.reindex(index=self._state.time_index, columns=common_fields)
 
-        # Ensure numeric dtype (CSV parsing can produce object dtype)
-        aligned = aligned.apply(pd.to_numeric, errors="coerce")
+        # Coerce to float in bulk (faster than per-column pd.to_numeric)
+        values = aligned.values
+        if values.dtype == object:
+            values = pd.to_numeric(values.ravel(), errors="coerce").reshape(values.shape)
+        values = values.astype(np.float64, copy=False)
 
-        # Write each field
-        for field_uid in common_fields:
-            if field_uid not in self._state._uid_to_index:
-                continue
-            field_idx = self._state._uid_to_index[field_uid]
-            arr[:, field_idx] = aligned[field_uid].values
+        # Build column-index mapping and write all fields in one zarr slice
+        col_indices = np.array(
+            [self._state._uid_to_index[f] for f in common_fields if f in self._state._uid_to_index],
+            dtype=np.intp,
+        )
+        arr[:, col_indices] = values[:, : len(col_indices)]
 
-        return int(np.count_nonzero(~np.isnan(aligned.values.astype(float))))
+        return int(np.count_nonzero(~np.isnan(values)))
 
     def _load_gridded_variable(
         self,
