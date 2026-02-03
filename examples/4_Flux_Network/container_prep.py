@@ -95,8 +95,18 @@ def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig, overwrite: 
     # Direct mode: parquet files named by site_id (e.g., US-FPe.parquet)
     container.ingest.gridmet(
         source_dir=cfg.met_dir,
-        variables=["eto", "etr", "prcp", "tmin", "tmax", "srad", "u2", "ea"],
-        include_corrected=True,  # Also ingest eto_corr, etr_corr if available
+        variables=[
+            "eto",
+            "etr",
+            "eto_corr",
+            "etr_corr",
+            "prcp",
+            "tmin",
+            "tmax",
+            "srad",
+            "u2",
+            "ea",
+        ],
         overwrite=overwrite,
     )
 
