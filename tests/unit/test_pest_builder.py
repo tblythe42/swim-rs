@@ -209,3 +209,46 @@ class TestEtfWeightEdgeCases:
             result = "default"
 
         assert result == "default"
+
+
+class TestMADParameterBounds:
+    """Tests for irrigation-dependent MAD parameter initial values and bounds.
+
+    The MAD (Management Allowable Depletion) parameter controls when irrigation
+    is triggered. Irrigated fields should have low MAD (trigger early), while
+    non-irrigated fields tolerate more depletion.
+
+    This mirrors the logic in PestBuilder.get_pest_builder_args() lines 323-333.
+    """
+
+    @staticmethod
+    def _mad_params(irr: float) -> dict:
+        """Extract MAD initial value and bounds given mean irrigation fraction."""
+        if irr > 0.2:
+            return {"initial": 0.10, "lower": 0.10, "upper": 0.3}
+        else:
+            return {"initial": 0.5, "lower": 0.3, "upper": 0.8}
+
+    def test_irrigated_field_mad_bounds(self):
+        """Irrigated fields (irr > 0.2) get MAD bounds [0.10, 0.3]."""
+        p = self._mad_params(irr=0.5)
+        assert p["initial"] == 0.10
+        assert p["lower"] == 0.10
+        assert p["upper"] == 0.3
+
+    def test_non_irrigated_field_mad_bounds(self):
+        """Non-irrigated fields get MAD bounds [0.3, 0.8]."""
+        p = self._mad_params(irr=0.05)
+        assert p["initial"] == 0.5
+        assert p["lower"] == 0.3
+        assert p["upper"] == 0.8
+
+    def test_boundary_value_not_irrigated(self):
+        """irr == 0.2 is NOT irrigated (threshold is > 0.2)."""
+        p = self._mad_params(irr=0.2)
+        assert p["initial"] == 0.5
+
+    def test_boundary_value_irrigated(self):
+        """irr just above 0.2 is irrigated."""
+        p = self._mad_params(irr=0.21)
+        assert p["initial"] == 0.10
