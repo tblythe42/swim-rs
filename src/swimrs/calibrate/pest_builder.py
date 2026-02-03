@@ -110,7 +110,9 @@ class PestBuilder:
         self.master_dir = os.path.join(config.pest_run_dir, "master")
 
         self.workers_dir = os.path.join(config.pest_run_dir, "workers")
-        self.obs_dir = os.path.join(config.pest_run_dir, "obs")
+        self.obs_dir = getattr(config, "obs_folder", None) or os.path.join(
+            config.pest_run_dir, "obs"
+        )
 
         self.pst_file = os.path.join(self.pest_dir, f"{self.config.project_name}.pst")
         self.obs_idx_file = os.path.join(self.pest_dir, f"{self.config.project_name}.idx.csv")
@@ -169,7 +171,6 @@ class PestBuilder:
         dynamics = exporter._get_dynamics_dict(self.plot_order)
         self.irr = dynamics.get("irr", {})
         self.ke_max = dynamics.get("ke_max", {})
-        self.kc_max = dynamics.get("kc_max", {})
         self.gwsub_data = dynamics.get("gwsub", {})
 
         # Date range from container
@@ -267,7 +268,6 @@ class PestBuilder:
         # Some projects (international) may not have SSURGO; allow missing AWC
         aw = [self.plot_properties.get(t, {}).get("awc", np.nan) for t in targets]
         ke_max = [self.ke_max.get(t, 1.0) for t in targets]
-        kc_max = [self.kc_max.get(t, 1.0) for t in targets]
 
         et_ins = [f"etf_{fid}.ins" for fid in targets]
         swe_ins = [f"swe_{fid}.ins" for fid in targets]
@@ -298,10 +298,6 @@ class PestBuilder:
                 elif "ke_max_" in k:
                     ke_max_ = ke_max[i]
                     params.append((k, ke_max_, f"p_{k}_0_constant.csv"))
-
-                elif "kc_max_" in k:
-                    kc_max_ = kc_max[i]
-                    params.append((k, kc_max_, f"p_{k}_0_constant.csv"))
 
                 elif "mad_" in k:
                     # Prefer properties-based irrigation fraction when present, otherwise use inferred dynamics.
@@ -367,16 +363,16 @@ class PestBuilder:
 
         for e, (ii, r) in enumerate(df.iterrows()):
             pars[ii]["use_rows"] = e
-            if any(prefix in ii for prefix in ["aw_", "ke_max_", "kc_max_", "mad_", "ndvi_0_"]):
+            if any(prefix in ii for prefix in ["aw_", "ke_max_", "mad_", "ndvi_0_"]):
                 val = float(r["value"])
                 pars[ii]["initial_value"] = val
 
-                if any(prefix in ii for prefix in ["ke_max_", "kc_max_"]):
+                if "ke_max_" in ii:
+                    # ke_max is a prior (not calibrated) — collapse bounds
                     if val < pars[ii]["lower_bound"]:
                         pars[ii]["lower_bound"] = val - 0.2
                         pars[ii]["initial_value"] = val - 0.1
                         pars[ii]["upper_bound"] = val
-
                     if val > pars[ii]["upper_bound"]:
                         pars[ii]["lower_bound"] = val - 0.3
                         pars[ii]["initial_value"] = val - 0.1
@@ -416,6 +412,10 @@ class PestBuilder:
                 "Use of exising Pest++ project was specified, "
                 'running "build_pest" will overwrite it.'
             )
+
+        # Observation files are the source of obsval in the .pst (via PstFrom).
+        # Ensure they reflect the requested ETf target model (and SWE).
+        self._export_observations(etf_model=target_etf)
 
         # Create minimal template directory for PstFrom
         # (Avoids copying workers/master/pest dirs which causes recursive copying)
@@ -471,6 +471,52 @@ class PestBuilder:
 
         if self.verbose:
             print("Configured PEST++ for {} targets, ".format(len(self.pest_args["targets"])))
+
+    def _export_observations(self, etf_model: str) -> None:
+        """Export ETf/SWE observation arrays for PstFrom from the SwimContainer.
+
+        PstFrom sets each observation's ``obsval`` from the numpy files in ``obs_dir``.
+        If these files contain model output (or are missing), calibration will not
+        target satellite ETf/SWE as intended.
+        """
+        if self._container is None:
+            raise ValueError("Container not initialized")
+
+        obs_dir = Path(self.obs_dir)
+        obs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Prefer config irrigation threshold; fall back to typical 0.3.
+        irr_threshold = getattr(self.config, "irr_threshold", None)
+        if irr_threshold is None:
+            irr_threshold = getattr(self.config, "irrigation_threshold", 0.3)
+
+        # Limit export to the current target set (supports debug_fields slicing).
+        fields = list(self.pest_args.get("targets", self.plot_order))
+
+        # Always include no_mask so international workflows can export observations.
+        masks = ("irr", "inv_irr", "no_mask")
+
+        start_date = (
+            self.config.start_dt.date().isoformat()
+            if getattr(self.config, "start_dt", None)
+            else None
+        )
+        end_date = (
+            self.config.end_dt.date().isoformat() if getattr(self.config, "end_dt", None) else None
+        )
+
+        try:
+            self._container.export.observations(
+                output_dir=obs_dir,
+                etf_model=etf_model,
+                masks=masks,
+                irr_threshold=float(irr_threshold),
+                fields=fields,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to export observations to {obs_dir}: {e}") from e
 
     def print_build_diagnostics(self, max_groups: int = 25) -> pd.DataFrame:
         """Print a compact diagnostics table after building the PEST++ project.
@@ -676,11 +722,12 @@ def run():
     )
 
     # Write predictions (ETf and SWE)
+    # Replace NaN with 0.0 so PEST++ instruction files can parse the output.
     for i, fid in enumerate(swim_input.fids):
         etf_path = os.path.join(pred_dir, f"pred_etf_{fid}.np")
         swe_path = os.path.join(pred_dir, f"pred_swe_{fid}.np")
-        np.savetxt(etf_path, output.etf[:, i])
-        np.savetxt(swe_path, output.swe[:, i])
+        np.savetxt(etf_path, np.nan_to_num(output.etf[:, i], nan=0.0))
+        np.savetxt(swe_path, np.nan_to_num(output.swe[:, i], nan=0.0))
 
     elapsed = time.time() - start_time
     print(f"Execution time: {elapsed:.2f} seconds")
@@ -797,6 +844,11 @@ if __name__ == "__main__":
         pst.pestpp_options["ies_drop_conflicts"] = "true"
         # pst.pestpp_options["ies_reg_factor"] = 0.25
         # pst.pestpp_options["ies_use_approx"] = 'true'
+
+        # Tier 1 performance options
+        pst.pestpp_options["num_tpl_ins_threads"] = 10
+        pst.pestpp_options["overdue_giveup_fac"] = 3.0
+        pst.pestpp_options["ies_verbose_level"] = 0
 
         if ies_num_threads is not None:
             pst.pestpp_options["ies_num_threads"] = ies_num_threads
@@ -983,12 +1035,6 @@ if __name__ == "__main__":
 
             with open(self.config.spinup, "w") as f:
                 json.dump(spn_dct, f, indent=2)
-
-            # Write observation baseline files for PstFrom
-            os.makedirs(self.obs_dir, exist_ok=True)
-            for i, fid in enumerate(swim_input.fids):
-                np.savetxt(os.path.join(self.obs_dir, f"obs_etf_{fid}.np"), output.etf[:, i])
-                np.savetxt(os.path.join(self.obs_dir, f"obs_swe_{fid}.np"), output.swe[:, i])
 
             if self.verbose:
                 print(f"Spinup saved to {self.config.spinup}")
@@ -1194,7 +1240,7 @@ if __name__ == "__main__":
             d["weight"] = 0.0
 
             if not captures_for_this_df.empty and total_valid_obs > 0:
-                # Magnitude weighting: higher ETf values get higher weight
+                # Magnitude-weighted: high-ETf dates contribute more to phi
                 obsvals = d.loc[captures_for_this_df, "obsval"].values
                 if self.etf_std is not None and self.etf_std.get(fid) is not None:
                     d.loc[captures_for_this_df, "weight"] = obsvals / (
@@ -1297,8 +1343,6 @@ if __name__ == "__main__":
         removed = start_weight - end_weight
         self.pest.obs_dfs[i] = d
         print(f"Removed {int(removed)} conflicted obs from etf, leaving {int(end_weight)}")
-
-        self.pest.build_pst(version=2)
 
 
 if __name__ == "__main__":

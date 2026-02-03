@@ -51,7 +51,7 @@ refet_type = "eto"
 runoff_process = "cn"
 
 [date_range]
-start_date = "1987-01-01"
+start_date = "2016-01-01"
 end_date = "2024-12-31"
 
 [crop_coefficient]
