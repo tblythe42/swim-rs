@@ -27,6 +27,7 @@ def run_pest_sequence(
     results_dir: str,
     pdc_remove: bool = False,
     debug_fields: list[str] | None = None,
+    ies_num_threads: int | None = None,
 ):
     project = cfg.project_name
 
@@ -102,7 +103,7 @@ def run_pest_sequence(
     reals = 20 if debug_fields else cfg.realizations
     n_workers = min(10, cfg.workers) if debug_fields else cfg.workers
     noptmax = 3
-    builder.write_control_settings(noptmax=noptmax, reals=reals)
+    builder.write_control_settings(noptmax=noptmax, reals=reals, ies_num_threads=ies_num_threads)
     pst_name = f"{project}.pst"
     run_pst(
         p_dir,
@@ -132,16 +133,20 @@ def run_pest_sequence(
 
 
 if __name__ == "__main__":
+    import time
+
     cfg = _load_config()
 
-    # Debug subset: set to None for full run
-    # Match 3_Crane reference: S2 only, 20 reals, noptmax=3
-    DEBUG_FIELDS = ["S2"]
+    # Full 60-site production run
+    DEBUG_FIELDS = None
 
     results = os.path.join(cfg.project_ws, "results")
+    t0 = time.time()
     run_pest_sequence(
         cfg,
         results,
         pdc_remove=True,
         debug_fields=DEBUG_FIELDS,
     )
+    elapsed = time.time() - t0
+    print(f"\nTotal elapsed: {elapsed:.1f} s ({elapsed / 60:.1f} min)")

@@ -1,272 +1,366 @@
-"""
-Evaluate SWIM model against flux tower observations using the process package API.
+"""Evaluate calibrated SWIM against flux tower ET and OpenET models.
 
-This module runs the model for all flux sites and compares against
-OpenET ensemble and flux tower observations.
+Runs the calibrated model in forecast mode and compares SWIM ET against
+energy-balance-corrected flux tower ET (ET_corr) alongside 4 open-source
+OpenET models (geeSEBAL, PT-JPL, SSEBop, SIMS) plus their ensemble mean.
+
+OpenET model ET is computed directly from per-model ETf stored in the
+container (ETf × ETo), not from external CSV files.
 
 Usage:
-    python evaluate.py [--output-dir PATH] [--sites SITE1,SITE2,...] [--gap-tolerance N]
+    python evaluate.py [--par-csv PATH] [--sites SITE1,SITE2]
 """
 
+import argparse
+import json
 import os
-import time
+import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
-from openet_evaluation import evaluate_openet_site
+from scipy import stats
+from sklearn.metrics import mean_squared_error, r2_score
 
-from swimrs.calibrate.flux_utils import get_flux_sites
 from swimrs.container import SwimContainer
 from swimrs.process.input import build_swim_input
-from swimrs.process.loop import run_daily_loop
+from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
-
-def output_to_dataframe(output, swim_input, field_idx: int) -> pd.DataFrame:
-    """Convert DailyOutput arrays to DataFrame for a single field."""
-    dates = pd.date_range(swim_input.start_date, periods=output.n_days, freq="D")
-
-    df = pd.DataFrame(
-        {
-            "et_act": output.eta[:, field_idx],
-            "kc_act": output.etf[:, field_idx],
-            "kc_bas": output.kcb[:, field_idx],
-            "ke": output.ke[:, field_idx],
-            "ks": output.ks[:, field_idx],
-            "kr": output.kr[:, field_idx],
-            "runoff": output.runoff[:, field_idx],
-            "rain": output.rain[:, field_idx],
-            "melt": output.melt[:, field_idx],
-            "swe": output.swe[:, field_idx],
-            "depl_root": output.depl_root[:, field_idx],
-            "dperc": output.dperc[:, field_idx],
-            "irrigation": output.irr_sim[:, field_idx],
-            "soil_water": output.gw_sim[:, field_idx],
-        },
-        index=dates,
-    )
-
-    return df
+OPEN_SOURCE_MODELS = ["geesebal", "ptjpl", "ssebop", "sims"]
+IRR_THRESHOLD = 0.3
 
 
-def input_to_dataframe(swim_input, field_idx: int) -> pd.DataFrame:
-    """Extract input time series for a field."""
-    dates = pd.date_range(swim_input.start_date, periods=swim_input.n_days, freq="D")
-
-    etr = swim_input.get_time_series("etr")
-    prcp = swim_input.get_time_series("prcp")
-    tmin = swim_input.get_time_series("tmin")
-    tmax = swim_input.get_time_series("tmax")
-
-    df = pd.DataFrame(
-        {
-            "etref": etr[:, field_idx],
-            "ppt": prcp[:, field_idx],
-            "tmin": tmin[:, field_idx],
-            "tmax": tmax[:, field_idx],
-        },
-        index=dates,
-    )
-
-    # Add ETf observations if available
-    try:
-        etf_irr = swim_input.get_time_series("etf_irr")
-        etf_inv_irr = swim_input.get_time_series("etf_inv_irr")
-        df["etf_irr"] = etf_irr[:, field_idx]
-        df["etf_inv_irr"] = etf_inv_irr[:, field_idx]
-    except (KeyError, ValueError):
-        pass
-
-    return df
-
-
-def run_flux_site(fid: str, cfg: ProjectConfig, container: SwimContainer, outfile: str) -> None:
-    """Run SWIM model for a single flux site and save output."""
-    start_time = time.time()
-
-    # Build swim_input.h5 for this site (use temp location)
-    h5_path = outfile.replace(".csv", ".h5")
-
-    swim_input = build_swim_input(
-        container,
-        output_h5=h5_path,
-        spinup_json_path=None,
-        etf_model=cfg.etf_target_model,
-        met_source="gridmet",
-        fields=[fid],
-    )
-
-    # Run simulation
-    output, final_state = run_daily_loop(swim_input)
-
-    print(f"\nExecution time: {time.time() - start_time:.2f} seconds\n")
-
-    # Convert to DataFrame
-    field_idx = swim_input.fids.index(fid)
-    out_df = output_to_dataframe(output, swim_input, field_idx)
-    in_df = input_to_dataframe(swim_input, field_idx)
-    df = pd.concat([out_df, in_df], axis=1)
-
-    # Filter to config date range
-    df = df.loc[cfg.start_dt : cfg.end_dt]
-    df.to_csv(outfile)
-
-
-def get_irr_data_from_container(container: SwimContainer, fid: str) -> dict:
-    """Extract irrigation data for a field from container."""
-    try:
-        props = container.query.properties(fields=[fid])
-        if fid in props and "irr" in props[fid]:
-            return props[fid]["irr"]
-    except Exception:
-        pass
-    return {}
-
-
-def compare_openet(
-    fid: str,
-    flux_file: str,
-    model_output: str,
-    openet_dir: str,
-    irr_data: dict,
-    return_comparison: bool = False,
-    gap_tolerance: int = 5,
-):
-    """Compare SWIM and OpenET ensemble against flux observations for a single site."""
-    openet_daily = os.path.join(openet_dir, "daily_data", f"{fid}.csv")
-    openet_monthly = os.path.join(openet_dir, "monthly_data", f"{fid}.csv")
-    irr_ = irr_data.get(fid, {})
-    daily, overpass, monthly = evaluate_openet_site(
-        model_output,
-        flux_file,
-        openet_daily_path=openet_daily,
-        openet_monthly_path=openet_monthly,
-        irr=irr_,
-        gap_tolerance=gap_tolerance,
-    )
-
-    if monthly is None:
-        return None
-
-    agg_comp = monthly.copy()
-    if len(agg_comp) < 3:
-        return None
-
-    rmse_values = {k.split("_", 1)[1]: v for k, v in agg_comp.items() if k.startswith("rmse_")}
-    if not rmse_values:
-        return None
-
-    best_overall_model = min(rmse_values, key=rmse_values.get)
-    if not return_comparison:
-        return best_overall_model
-
-    print(f"n Samples: {agg_comp.get('n_samples')}")
-    print("Best overall:", best_overall_model)
-    return best_overall_model
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Evaluate SWIM model against flux tower observations"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default=None,
-        help="Output directory (default: {project_ws}/results)",
-    )
-    parser.add_argument(
-        "--sites",
-        type=str,
-        default=None,
-        help="Comma-separated site IDs to evaluate (default: all)",
-    )
-    parser.add_argument(
-        "--gap-tolerance",
-        type=int,
-        default=5,
-        help="Gap tolerance for evaluation (default: 5)",
-    )
-    args = parser.parse_args()
-
+def load_config():
     project_dir = Path(__file__).resolve().parent
     conf = project_dir / "5_Flux_Ensemble.toml"
-
     cfg = ProjectConfig()
-    cfg.read_config(str(conf))
-
-    station_metadata = os.path.join(cfg.data_dir, "station_metadata.csv")
-    all_sites, sdf = get_flux_sites(
-        station_metadata, crop_only=False, return_df=True, western_only=True, header=1
-    )
-
-    # Filter sites if specified
-    if args.sites:
-        sites = [s.strip() for s in args.sites.split(",")]
+    if os.path.isdir("/data/ssd2/swim"):
+        cfg.read_config(str(conf), calibrate=True)
     else:
-        sites = all_sites
+        cfg.read_config(str(conf), project_root_override=str(project_dir.parent), calibrate=True)
+    return cfg
 
-    openet_dir = os.path.join(cfg.data_dir, "openet_flux")
-    flux_dir = os.path.join(cfg.data_dir, "daily_flux_files")
 
-    # Use output-dir if specified, otherwise default to project_ws/results
-    if args.output_dir:
-        run_dir = args.output_dir
-    else:
-        run_dir = os.path.join(cfg.project_ws, "results")
-    os.makedirs(run_dir, exist_ok=True)
+def parse_pest_params(par_csv, fids):
+    """Parse PEST++ .par.csv into {fid: {param: value}} using median realization."""
+    df = pd.read_csv(par_csv, index_col=0)
 
-    # Open container
-    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
-    if not os.path.exists(container_path):
-        raise FileNotFoundError(
-            f"Container not found at {container_path}. "
-            "Run container_prep.py first to create the container."
+    numeric_rows = df.loc[df.index != "base"]
+    row = numeric_rows.median()
+
+    params_by_fid = {}
+    for col in df.columns:
+        parts = col.split("_ptype:")[0]
+        parts = parts.replace("pname:p_", "")
+        parts = parts.rsplit("_:0", 1)[0]
+
+        matched_fid = None
+        for fid in fids:
+            if parts.lower().endswith(f"_{fid.lower()}"):
+                matched_fid = fid
+                param_name = parts[: -(len(fid) + 1)]
+                break
+
+        if matched_fid:
+            if matched_fid not in params_by_fid:
+                params_by_fid[matched_fid] = {}
+            params_by_fid[matched_fid][param_name] = float(row[col])
+
+    return params_by_fid
+
+
+def run_calibrated_model(cfg, container, fids, calibrated_params):
+    """Run model with calibrated parameters. Returns {fid: DataFrame}."""
+    with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
+        temp_h5 = tmp.name
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as tmp:
+        json.dump(calibrated_params, tmp)
+        params_json = tmp.name
+
+    try:
+        swim_input = build_swim_input(
+            container,
+            output_h5=temp_h5,
+            calibrated_params_path=params_json,
+            start_date=cfg.start_dt,
+            end_date=cfg.end_dt,
+            runoff_process=getattr(cfg, "runoff_process", "cn"),
+            refet_type=getattr(cfg, "refet_type", "eto") or "eto",
+            fields=fids,
         )
 
-    container = SwimContainer.open(container_path, mode="r")
+        output, _ = run_daily_loop_fast(swim_input)
+        dates = pd.date_range(swim_input.start_date, periods=swim_input.n_days, freq="D")
+        etr = swim_input.get_time_series("etr")
 
-    # Load irrigation data from container for all sites
+        results = {}
+        for i, fid in enumerate(swim_input.fids):
+            results[fid] = pd.DataFrame(
+                {
+                    "et_act": output.eta[:, i],
+                    "etf_model": output.etf[:, i],
+                    "etref": etr[:, i],
+                    "swe": output.swe[:, i],
+                },
+                index=dates,
+            )
+
+        swim_input.close()
+    finally:
+        for p in [temp_h5, params_json]:
+            if os.path.exists(p):
+                os.remove(p)
+
+    return results
+
+
+def load_flux_et(fid, flux_dir):
+    """Load energy-balance-corrected ET from flux tower data."""
+    path = os.path.join(flux_dir, f"{fid}_daily_data.csv")
+    if not os.path.exists(path):
+        return pd.Series(dtype=float)
+    df = pd.read_csv(path, index_col="date", parse_dates=True)
+    if "ET_corr" in df.columns:
+        return df["ET_corr"]
+    return pd.Series(dtype=float)
+
+
+def load_openet_etf(container, fid, irr_data):
+    """Load per-model ETf from the container and select irr/inv_irr mask by year.
+
+    Returns {model_name: pd.Series} of ETf values with year-appropriate mask applied.
+    """
+    field_irr = irr_data.get(fid, {})
+    irr_years = set()
+    for k, v in field_irr.items():
+        if k == "fallow_years":
+            continue
+        try:
+            if isinstance(v, dict) and v.get("f_irr", 0.0) >= IRR_THRESHOLD:
+                irr_years.add(int(k))
+        except (ValueError, TypeError):
+            continue
+
+    etf_by_model = {}
+    for model in OPEN_SOURCE_MODELS:
+        # Load both masks
+        etf_inv = etf_irr = None
+        for mask in ["inv_irr", "irr"]:
+            etf_path = f"remote_sensing/etf/landsat/{model}/{mask}"
+            try:
+                etf_df = container.query.dataframe(etf_path, fields=[fid])
+                if fid in etf_df.columns:
+                    series = etf_df[fid]
+                    if mask == "inv_irr":
+                        etf_inv = series
+                    else:
+                        etf_irr = series
+            except Exception:
+                pass
+
+        if etf_inv is None and etf_irr is None:
+            continue
+
+        # Default to inv_irr, switch to irr for irrigated years
+        if etf_inv is not None:
+            combined = etf_inv.copy()
+        else:
+            combined = pd.Series(np.nan, index=etf_irr.index)
+
+        if etf_irr is not None and irr_years:
+            irr_mask = combined.index.year.isin(irr_years)
+            combined.loc[irr_mask] = etf_irr.loc[irr_mask]
+
+        etf_by_model[model] = combined
+
+    return etf_by_model
+
+
+def calc_metrics(obs, mod):
+    """Calculate R2, Pearson r, RMSE, bias between obs and mod arrays."""
+    mask = np.isfinite(obs) & np.isfinite(mod)
+    obs, mod = obs[mask], mod[mask]
+    if len(obs) < 10:
+        return {"n": len(obs), "r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+    r, _ = stats.pearsonr(obs, mod)
+    r2 = r2_score(obs, mod)
+    rmse = np.sqrt(mean_squared_error(obs, mod))
+    bias = float((mod - obs).mean())
+    return {"n": len(obs), "r2": r2, "r": r, "rmse": rmse, "bias": bias}
+
+
+def evaluate(cfg, container, par_csv, fids, flux_dir):
+    """Run calibrated model and evaluate against flux tower ET and OpenET models.
+
+    Returns DataFrame with per-field metrics for SWIM and each OpenET model.
+    """
+    print(f"Evaluating {len(fids)} fields from {par_csv}")
+
+    # Load irrigation data from container
     irr_data = {}
     try:
         props = container.query.properties()
-        for fid in sites:
+        for fid in fids:
             if fid in props and "irr" in props[fid]:
                 irr_data[fid] = props[fid]["irr"]
     except Exception:
         pass
 
-    complete, incomplete = [], []
+    calibrated_params = parse_pest_params(par_csv, fids)
+    missing = [f for f in fids if f not in calibrated_params]
+    if missing:
+        print(f"WARNING: No calibrated params for: {missing}")
 
-    try:
-        for i, site_id in enumerate(sites):
-            lulc = sdf.at[site_id, "General classification"]
-            print(f"\n{i} {site_id}: {lulc}")
+    print("Running calibrated model...")
+    model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
 
-            flux_file = os.path.join(flux_dir, f"{site_id}_daily_data.csv")
-            out_csv = os.path.join(run_dir, f"{site_id}.csv")
+    rows = []
+    for fid in fids:
+        flux_et = load_flux_et(fid, flux_dir)
+        if flux_et.empty:
+            print(f"  {fid}: no flux data, skipping")
+            continue
 
-            try:
-                run_flux_site(site_id, cfg, container, out_csv)
-            except Exception as exc:
-                print(f"{site_id} error: {exc}")
-                incomplete.append(site_id)
+        model_df = model_results[fid]
+        swim_et = model_df["et_act"]
+        etref = model_df["etref"]
+
+        # Common dates between model and flux
+        common = swim_et.index.intersection(flux_et.index)
+        if len(common) < 10:
+            print(f"  {fid}: only {len(common)} overlapping days, skipping")
+            continue
+
+        obs = flux_et.loc[common].values
+
+        # SWIM metrics
+        row = {"fid": fid}
+        m = calc_metrics(obs, swim_et.loc[common].values)
+        row["n"] = m["n"]
+        for k in ["r2", "r", "rmse", "bias"]:
+            row[f"{k}_swim"] = m[k]
+
+        # Per-model OpenET metrics (ET = ETf × ETo on capture dates)
+        etf_by_model = load_openet_etf(container, fid, irr_data)
+        model_et_on_common = {}
+
+        for model_name in OPEN_SOURCE_MODELS:
+            if model_name not in etf_by_model:
+                for k in ["r2", "r", "rmse", "bias"]:
+                    row[f"{k}_{model_name}"] = np.nan
                 continue
 
-            _ = compare_openet(
-                site_id,
-                flux_file,
-                out_csv,
-                openet_dir,
-                irr_data,
-                return_comparison=True,
-                gap_tolerance=args.gap_tolerance,
-            )
-            complete.append(site_id)
+            etf_series = etf_by_model[model_name]
+            et_series = etf_series * etref
+            et_on_common = et_series.reindex(common)
 
-        print(f"complete: {complete}")
-        print(f"incomplete: {incomplete}")
+            valid = np.isfinite(et_on_common.values) & np.isfinite(obs)
+            if valid.sum() >= 10:
+                model_et_on_common[model_name] = et_on_common.values
+                m = calc_metrics(obs, et_on_common.values)
+            else:
+                m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_{model_name}"] = m[k]
+
+        # Open-source ensemble (nanmean of available models)
+        if model_et_on_common:
+            stack = np.column_stack(list(model_et_on_common.values()))
+            ensemble_et = np.nanmean(stack, axis=1)
+            m = calc_metrics(obs, ensemble_et)
+        else:
+            m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+
+        for k in ["r2", "r", "rmse", "bias"]:
+            row[f"{k}_ensemble"] = m[k]
+
+        rows.append(row)
+
+        print(
+            f"  {fid}: n={row['n']:>5d}  "
+            f"R2_swim={row['r2_swim']:.3f}  R2_ens={row['r2_ensemble']:.3f}  "
+            f"RMSE_swim={row['rmse_swim']:.3f}  RMSE_ens={row['rmse_ensemble']:.3f}"
+        )
+
+    if not rows:
+        print("No fields with sufficient data for evaluation.")
+        return pd.DataFrame()
+
+    metrics_df = pd.DataFrame(rows).set_index("fid")
+
+    # Aggregate summary
+    all_models = ["swim"] + OPEN_SOURCE_MODELS + ["ensemble"]
+    print("\n" + "=" * 80)
+    print(f"AGGREGATE ({len(metrics_df)} fields)")
+    print("=" * 80)
+    header = f"{'model':<12}"
+    for stat in ["r2", "r", "rmse", "bias"]:
+        header += f"  {stat + '_mean':>10}  {stat + '_med':>10}"
+    print(header)
+    print("-" * len(header))
+
+    for model_name in all_models:
+        line = f"{model_name:<12}"
+        for stat in ["r2", "r", "rmse", "bias"]:
+            col = f"{stat}_{model_name}"
+            if col in metrics_df.columns:
+                vals = metrics_df[col].dropna()
+                line += f"  {vals.mean():>10.3f}  {vals.median():>10.3f}"
+            else:
+                line += f"  {'n/a':>10}  {'n/a':>10}"
+        print(line)
+
+    return metrics_df
+
+
+def find_par_csv(results_dir, project_name):
+    """Find the latest .par.csv in results directory."""
+    for i in range(10, -1, -1):
+        candidate = os.path.join(results_dir, f"{project_name}.{i}.par.csv")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Evaluate calibrated SWIM against flux tower ET and OpenET models"
+    )
+    parser.add_argument(
+        "--par-csv", type=str, default=None, help="Override automatic par.csv discovery"
+    )
+    parser.add_argument(
+        "--sites", type=str, default=None, help="Comma-separated site IDs (default: all)"
+    )
+    args = parser.parse_args()
+
+    cfg = load_config()
+    flux_dir = os.path.join(cfg.data_dir, "flux")
+    results_dir = os.path.join(cfg.project_ws, "results")
+
+    if args.par_csv:
+        par_csv = args.par_csv
+    else:
+        par_csv = find_par_csv(results_dir, cfg.project_name)
+    if par_csv is None:
+        raise FileNotFoundError(f"No .par.csv found in {results_dir}")
+    print(f"Using parameters: {par_csv}")
+
+    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+    container = SwimContainer.open(container_path, mode="r")
+
+    if args.sites:
+        fids = [s.strip() for s in args.sites.split(",")]
+    else:
+        fids = container.field_uids
+
+    try:
+        metrics = evaluate(cfg, container, par_csv, fids, flux_dir)
+        out_csv = os.path.join(results_dir, "evaluation_metrics.csv")
+        os.makedirs(results_dir, exist_ok=True)
+        metrics.to_csv(out_csv)
+        print(f"\nMetrics saved to {out_csv}")
     finally:
         container.close()
