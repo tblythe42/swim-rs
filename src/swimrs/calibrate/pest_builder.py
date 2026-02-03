@@ -779,13 +779,17 @@ if __name__ == "__main__":
 
         pst.write(self.pst_file, version=2)
 
-    def write_control_settings(self, noptmax: int = -2, reals: int = 250) -> None:
+    def write_control_settings(
+        self, noptmax: int = -2, reals: int = 250, ies_num_threads: int | None = None
+    ) -> None:
         """Write PEST++ IES control settings to the .pst file.
 
         Args:
             noptmax: Maximum optimization iterations. Use -2 for parameter
                 estimation mode, positive values for optimization.
             reals: Number of realizations in the ensemble.
+            ies_num_threads: Number of threads for PEST++ IES ensemble upgrade.
+                If None, PEST++ uses its default (single-threaded upgrade).
         """
         pst = Pst(self.pst_file)
         pst.pestpp_options["ies_localizer"] = "loc.mat"
@@ -793,6 +797,9 @@ if __name__ == "__main__":
         pst.pestpp_options["ies_drop_conflicts"] = "true"
         # pst.pestpp_options["ies_reg_factor"] = 0.25
         # pst.pestpp_options["ies_use_approx"] = 'true'
+
+        if ies_num_threads is not None:
+            pst.pestpp_options["ies_num_threads"] = ies_num_threads
 
         pst.control_data.noptmax = noptmax
         oe = ObservationEnsemble.from_gaussian_draw(pst=pst, num_reals=reals)
@@ -939,6 +946,7 @@ if __name__ == "__main__":
 
             # Build swim_input.h5 for spinup (no existing spinup state)
             # This file will be rebuilt with spinup state by _build_swim_input()
+            os.makedirs(self.pest_dir, exist_ok=True)
             h5_path = os.path.join(self.pest_dir, "swim_input.h5")
             swim_input = build_swim_input(
                 container=self._container,
@@ -975,6 +983,12 @@ if __name__ == "__main__":
 
             with open(self.config.spinup, "w") as f:
                 json.dump(spn_dct, f, indent=2)
+
+            # Write observation baseline files for PstFrom
+            os.makedirs(self.obs_dir, exist_ok=True)
+            for i, fid in enumerate(swim_input.fids):
+                np.savetxt(os.path.join(self.obs_dir, f"obs_etf_{fid}.np"), output.etf[:, i])
+                np.savetxt(os.path.join(self.obs_dir, f"obs_swe_{fid}.np"), output.swe[:, i])
 
             if self.verbose:
                 print(f"Spinup saved to {self.config.spinup}")
