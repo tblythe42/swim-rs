@@ -177,10 +177,6 @@ def compute_fused_ndvi(container: SwimContainer, cfg: ProjectConfig):
 
     container.compute.fused_ndvi(
         masks=("no_mask",),
-        instrument1="landsat",
-        instrument2="sentinel",
-        min_pairs=20,
-        window_days=5,
     )
 
     print("  Fused NDVI computation complete")
