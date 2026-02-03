@@ -20,9 +20,9 @@ landsat = "{remote_sensing}/landsat"
 [paths.conus]
 met = "{data}/meteorology/gridmet"
 gridmet_centroids = "{gis}/gridmet_centroids.shp"
-gridmet_mapping = "{gis}/fields_gfid.shp"
+gridmet_mapping = "{gis}/flux_fields_gfid.shp"
 correction_tifs = "{data}/bias_correction_tif"
-gridmet_factors = "{gis}/fields_gfid.json"
+gridmet_factors = "{gis}/flux_fields_gfid.json"
 irr = "{properties}/{project}_irr.csv"
 ssurgo = "{properties}/{project}_ssurgo.csv"
 snodas_in = "{data}/snow/snodas/extracts"
@@ -60,8 +60,8 @@ cover_proxy = "ndvi"
 
 [calibration]
 pest_run_dir = "{project_workspace}/pestrun"
-etf_target_model = "ssebop"
-etf_ensemble_members = ["ptjpl", "sims"]
+etf_target_model = "ensemble"
+etf_ensemble_members = ["ssebop", "ptjpl", "sims", "geesebal"]
 workers = 20
 realizations = 200
 calibration_dir = "{pest_run_dir}/pest/mult"

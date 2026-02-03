@@ -3,7 +3,6 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from swimrs.calibrate.flux_utils import get_flux_sites
 from swimrs.calibrate.pest_builder import PestBuilder
 from swimrs.calibrate.run_pest import run_pst
 from swimrs.container import SwimContainer
@@ -20,16 +19,14 @@ def _load_config() -> ProjectConfig:
     else:
         cfg.read_config(str(conf), project_root_override=str(project_dir.parent), calibrate=True)
 
-    cfg.python_script = str(project_dir / "custom_forward_run.py")
     return cfg
 
 
 def run_pest_sequence(
     cfg: ProjectConfig,
     results_dir: str,
-    select_stations,
     pdc_remove: bool = False,
-    overwrite: bool = False,
+    debug_fields: list[str] | None = None,
 ):
     project = cfg.project_name
 
@@ -55,6 +52,20 @@ def run_pest_sequence(
         python_script=getattr(cfg, "python_script", None),
         conflicted_obs=None,
     )
+
+    if debug_fields is not None:
+        missing = [f for f in debug_fields if f not in builder.plot_order]
+        if missing:
+            raise ValueError(f"Debug fields not in container: {missing}")
+        builder.plot_order = debug_fields
+        builder.pest_args = builder.get_pest_builder_args()
+        print(f"DEBUG: limiting to {len(debug_fields)} fields: {debug_fields}")
+
+    # Spinup must run before build_pest so that _build_swim_input can
+    # bake the spinup state into swim_input.h5 for workers.
+    builder.spinup(overwrite=True)
+    shutil.copyfile(builder.config.spinup, os.path.join(results_dir, "spinup.json"))
+
     builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
     builder.build_localizer()
 
@@ -64,9 +75,6 @@ def run_pest_sequence(
         builder.write_control_settings(noptmax=-1, reals=5)
     else:
         builder.write_control_settings(noptmax=0)
-
-    builder.spinup(overwrite=True)
-    shutil.copyfile(builder.config.spinup, os.path.join(results_dir, "spinup.json"))
 
     builder.dry_run(exe_)
 
@@ -83,18 +91,24 @@ def run_pest_sequence(
                 python_script=getattr(cfg, "python_script", None),
                 conflicted_obs=temp_pdc,
             )
+            if debug_fields is not None:
+                builder.plot_order = debug_fields
+                builder.pest_args = builder.get_pest_builder_args()
             builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
             builder.build_localizer()
             builder.write_control_settings(noptmax=0)
             builder.dry_run(exe_)
 
-    builder.write_control_settings(noptmax=3, reals=cfg.realizations)
+    reals = 20 if debug_fields else cfg.realizations
+    n_workers = min(10, cfg.workers) if debug_fields else cfg.workers
+    noptmax = 3
+    builder.write_control_settings(noptmax=noptmax, reals=reals)
     pst_name = f"{project}.pst"
     run_pst(
         p_dir,
         exe_,
         pst_name,
-        num_workers=cfg.workers,
+        num_workers=n_workers,
         worker_root=w_dir,
         master_dir=m_dir,
         verbose=False,
@@ -120,16 +134,14 @@ def run_pest_sequence(
 if __name__ == "__main__":
     cfg = _load_config()
 
-    station_metadata = os.path.join(cfg.data_dir, "station_metadata.csv")
-    # crop_sites = get_flux_sites(station_metadata, crop_only=True, western_only=True, header=1)
-    all_sites = get_flux_sites(station_metadata, crop_only=False, western_only=True, header=1)
-    non_crop_sites = [s for s in all_sites if s not in all_sites]
+    # Debug subset: set to None for full run
+    # Match 3_Crane reference: S2 only, 20 reals, noptmax=3
+    DEBUG_FIELDS = ["S2"]
 
-    results = os.path.join(cfg.project_ws, "diy_ensemble_test")
+    results = os.path.join(cfg.project_ws, "results")
     run_pest_sequence(
         cfg,
         results,
-        select_stations=["MR", "US-FPe", "ALARC2_Smith6"],
-        overwrite=True,
         pdc_remove=True,
+        debug_fields=DEBUG_FIELDS,
     )
