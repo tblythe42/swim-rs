@@ -2,7 +2,7 @@
   "attributes": {
     "project_name": "3_Crane",
     "schema_version": "1.0",
-    "created_at": "2026-01-29T20:05:45.132807+00:00",
+    "created_at": "2026-02-03T00:10:07.622488+00:00",
     "start_date": "2020-01-01",
     "end_date": "2021-12-31",
     "n_fields": 1,
@@ -10,13 +10,13 @@
     "uid_column": "site_id",
     "source_shapefile": "/home/dgketchum/code/swim-rs/examples/3_Crane/data/gis/flux_fields.shp",
     "provenance": {
-      "container_created_at": "2026-01-29T20:05:45.132787+00:00",
+      "container_created_at": "2026-02-03T00:10:07.622468+00:00",
       "container_created_by": null,
       "schema_version": "1.0",
       "events": [
         {
-          "id": "evt_b21f1a652c28",
-          "timestamp": "2026-01-29T20:05:45.283930+00:00",
+          "id": "evt_85d4ca95b1e8",
+          "timestamp": "2026-02-03T00:10:07.737709+00:00",
           "operation": "create",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -40,8 +40,8 @@
           "error_message": null
         },
         {
-          "id": "evt_c97741f9e35d",
-          "timestamp": "2026-01-29T20:05:45.434408+00:00",
+          "id": "evt_1746572b96e1",
+          "timestamp": "2026-02-03T00:10:07.870762+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -66,8 +66,8 @@
           "error_message": null
         },
         {
-          "id": "evt_e0a65b68909b",
-          "timestamp": "2026-01-29T20:05:45.751415+00:00",
+          "id": "evt_2ce5aa69c549",
+          "timestamp": "2026-02-03T00:10:08.173044+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -101,8 +101,8 @@
           "error_message": null
         },
         {
-          "id": "evt_bc404e4a4eb8",
-          "timestamp": "2026-01-29T20:05:46.889254+00:00",
+          "id": "evt_d90b95d954e9",
+          "timestamp": "2026-02-03T00:10:09.308925+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -122,8 +122,8 @@
           "error_message": null
         },
         {
-          "id": "evt_5a592b384e4e",
-          "timestamp": "2026-01-29T20:05:47.842304+00:00",
+          "id": "evt_76f580f13b23",
+          "timestamp": "2026-02-03T00:10:10.258433+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -145,8 +145,8 @@
           "error_message": null
         },
         {
-          "id": "evt_1ebbb112f024",
-          "timestamp": "2026-01-29T20:05:48.817155+00:00",
+          "id": "evt_2a2ce1c3f464",
+          "timestamp": "2026-02-03T00:10:11.210751+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -168,8 +168,8 @@
           "error_message": null
         },
         {
-          "id": "evt_dc103f197ea9",
-          "timestamp": "2026-01-29T20:05:49.247602+00:00",
+          "id": "evt_3153af33d4ea",
+          "timestamp": "2026-02-03T00:10:11.619305+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -192,8 +192,8 @@
           "error_message": null
         },
         {
-          "id": "evt_59539464e057",
-          "timestamp": "2026-01-29T20:05:49.689704+00:00",
+          "id": "evt_aa677aec63ab",
+          "timestamp": "2026-02-03T00:10:12.047402+00:00",
           "operation": "ingest",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -216,8 +216,8 @@
           "error_message": null
         },
         {
-          "id": "evt_e99b40109d88",
-          "timestamp": "2026-01-29T20:05:49.742053+00:00",
+          "id": "evt_cc10e0e9209c",
+          "timestamp": "2026-02-03T00:10:12.098425+00:00",
           "operation": "compute",
           "swim_version": "0.1.0",
           "user": "dgketchum",
@@ -247,8 +247,8 @@
           "error_message": null
         },
         {
-          "id": "evt_a87eb251bf60",
-          "timestamp": "2026-01-29T20:05:49.972887+00:00",
+          "id": "evt_e84ec909699c",
+          "timestamp": "2026-02-03T00:10:12.319857+00:00",
           "operation": "compute",
           "swim_version": "0.1.0",
           "user": "dgketchum",
