@@ -837,12 +837,11 @@ def _write_properties_from_container(
     ke_max_data = dynamics.get("ke_max", {})
     ke_max = np.array([ke_max_data.get(fid, 1.0) for fid in fids])
 
-    # kc_max: empirical (from 90th percentile ETf) or fixed FAO-56 value
+    # kc_max: empirical > fixed FAO-56 default
     if empirical_kc_max:
         kc_max_data = dynamics.get("kc_max", {})
         kc_max = np.array([kc_max_data.get(fid, 1.2) for fid in fids])
     else:
-        # Use fixed FAO-56 value for full-cover alfalfa reference
         kc_max = np.full(n_fields, 1.2)
 
     # f_sub

@@ -409,12 +409,11 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
             use_existing=False,
             python_script=getattr(config, "python_script", None),
         )
+        builder.spinup(
+            overwrite=True
+        )  # CRITICAL: before build_pest (bakes spinup into swim_input.h5)
         builder.build_pest(target_etf=config.etf_target_model, members=config.etf_ensemble_members)
         builder.build_localizer()
-
-        # Spinup (noptmax=0), then set real run
-        builder.write_control_settings(noptmax=0)
-        builder.spinup(overwrite=True)
 
         reals = int(args.realizations) if args.realizations else (config.realizations or 250)
         builder.write_control_settings(noptmax=3, reals=reals)
