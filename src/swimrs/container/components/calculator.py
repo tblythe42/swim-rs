@@ -421,17 +421,21 @@ class Calculator(Component):
 
         # Load ETf from all masks and combine
         etf_data = None
-        for mask in masks:
-            etf_path = f"remote_sensing/etf/{instruments[0]}/{etf_model}/{mask}"
-            if etf_path not in self._state.root:
-                continue
+        if etf_model == "ensemble":
+            # Average across all available ETf models
+            etf_data = self._load_ensemble_etf(fields, masks, instruments)
+        else:
+            for mask in masks:
+                etf_path = f"remote_sensing/etf/{instruments[0]}/{etf_model}/{mask}"
+                if etf_path not in self._state.root:
+                    continue
 
-            mask_etf = self._state.get_xarray(etf_path, fields=fields)
-            if etf_data is None:
-                etf_data = mask_etf
-            else:
-                # Fill NaN values from secondary mask
-                etf_data = etf_data.fillna(mask_etf)
+                mask_etf = self._state.get_xarray(etf_path, fields=fields)
+                if etf_data is None:
+                    etf_data = mask_etf
+                else:
+                    # Fill NaN values from secondary mask
+                    etf_data = etf_data.fillna(mask_etf)
 
         if etf_data is None:
             self._log.warning("no_etf_data", model=etf_model)
@@ -452,6 +456,54 @@ class Calculator(Component):
         )
 
         return ds
+
+    def _load_ensemble_etf(
+        self,
+        fields: list[str],
+        masks: tuple[str, ...],
+        instruments: tuple[str, ...],
+    ) -> xr.DataArray | None:
+        """Compute the mean ETf across all available models in the container.
+
+        Discovers every ``remote_sensing/etf/{instrument}/{model}/{mask}``
+        path, loads each model's data (combining masks via fill), then
+        returns the per-date, per-field mean.
+
+        Returns:
+            DataArray of ensemble-mean ETf, or ``None`` if no models found.
+        """
+        import xarray as xr
+
+        instrument = instruments[0]
+        etf_prefix = f"remote_sensing/etf/{instrument}"
+
+        # Discover available models by scanning the zarr group
+        if etf_prefix not in self._state.root:
+            return None
+
+        model_arrays = []
+        model_group = self._state.root[etf_prefix]
+        for model_name in sorted(model_group.keys()):
+            model_etf = None
+            for mask in masks:
+                etf_path = f"{etf_prefix}/{model_name}/{mask}"
+                if etf_path not in self._state.root:
+                    continue
+                mask_etf = self._state.get_xarray(etf_path, fields=fields)
+                if model_etf is None:
+                    model_etf = mask_etf
+                else:
+                    model_etf = model_etf.fillna(mask_etf)
+            if model_etf is not None:
+                model_arrays.append(model_etf)
+                self._log.debug("ensemble_member_loaded", model=model_name)
+
+        if not model_arrays:
+            return None
+
+        self._log.info("ensemble_etf_mean", n_models=len(model_arrays))
+        stacked = xr.concat(model_arrays, dim="model")
+        return stacked.mean(dim="model")
 
     def _compute_k_parameters(self, ds: xr.Dataset) -> tuple[xr.DataArray, xr.DataArray]:
         """
