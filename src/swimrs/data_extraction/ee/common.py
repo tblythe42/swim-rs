@@ -29,13 +29,51 @@ IRR = "projects/ee-dgketchum/assets/IrrMapper/IrrMapperComp"
 WEST_STATES = ["AZ", "CA", "CO", "ID", "MT", "NM", "NV", "OR", "UT", "WA", "WY"]
 EAST_STATES_FC = "users/dgketchum/boundaries/eastern_38_dissolved"
 
-# LANID irrigation dataset for eastern states
-LANID_ASSET = "projects/ee-dgketchum/assets/lanid/LANID_V1"
+# Public LANID irrigation datasets
+_LANID_V2 = "users/xyhuwmir4/LANID_postCls/LANID_v2"
+_LANID_2018_2020 = "users/xyhuwmir/LANID/update/LANID2018-2020"
 
 
 def get_lanid() -> ee.Image:
-    """Get the LANID irrigation dataset as an ee.Image."""
-    return ee.Image(LANID_ASSET)
+    """Build a multi-band LANID irrigation mask image for 1987-2024.
+
+    Returns an ee.Image with bands named ``irr_<year>`` where 1 indicates
+    irrigated.  Combines two public LANID assets:
+
+    - ``LANID_v2`` covers 1997-2017 (years before 1997 use 1997).
+    - ``LANID2018-2020`` covers 2018-2020 (years after 2020 use 2020).
+    """
+    first_image = ee.Image(_LANID_V2)
+    second_image = ee.Image(_LANID_2018_2020)
+
+    bands = None
+
+    for yr in range(1987, 2018):
+        year = max(yr, 1997)
+        band_name = f"irr_{yr}"
+        image = (
+            ee.Image(first_image.select([f"irMap{str(year)[-2:]}"]))
+            .rename([band_name])
+            .int()
+            .unmask(0)
+        )
+        if bands is None:
+            bands = ee.Image(image)
+        else:
+            bands = bands.addBands([image])
+
+    for yr in range(2018, 2025):
+        year = min(yr, 2020)
+        band_name = f"irr_{yr}"
+        image = (
+            ee.Image(second_image.select([f"irMap{str(year)[-2:]}"]))
+            .rename([band_name])
+            .int()
+            .unmask(0)
+        )
+        bands = bands.addBands([image])
+
+    return bands
 
 
 def load_shapefile(
