@@ -28,6 +28,12 @@ from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
 OPEN_SOURCE_MODELS = ["geesebal", "ptjpl", "ssebop", "sims"]
+VOLK_COLUMN_MAP = {
+    "GEESEBAL_3x3": "geesebal",
+    "PTJPL_3x3": "ptjpl",
+    "SSEBOP_3x3": "ssebop",
+    "SIMS_3x3": "sims",
+}
 IRR_THRESHOLD = 0.3
 
 
@@ -159,22 +165,50 @@ def load_openet_etf(container, fid, irr_data):
             except Exception:
                 pass
 
-        if etf_inv is None and etf_irr is None:
+        # Treat all-NaN series as missing
+        inv_valid = etf_inv is not None and etf_inv.notna().any()
+        irr_valid = etf_irr is not None and etf_irr.notna().any()
+
+        if not inv_valid and not irr_valid:
             continue
 
         # Default to inv_irr, switch to irr for irrigated years
-        if etf_inv is not None:
+        if inv_valid:
             combined = etf_inv.copy()
         else:
             combined = pd.Series(np.nan, index=etf_irr.index)
 
-        if etf_irr is not None and irr_years:
+        if irr_valid and irr_years:
             irr_mask = combined.index.year.isin(irr_years)
             combined.loc[irr_mask] = etf_irr.loc[irr_mask]
+
+        # If inv_irr had no valid data, fall back entirely to irr
+        if not inv_valid and irr_valid:
+            combined = etf_irr.copy()
 
         etf_by_model[model] = combined
 
     return etf_by_model
+
+
+def load_volk_openet_et(fid, openet_daily_dir):
+    """Load per-model daily ET from Volk OpenET 3x3 extractions.
+
+    These CSVs contain actual ET (mm/day), not ETf fractions.
+    Returns {model_name: pd.Series} of sparse ET on Landsat dates.
+    """
+    path = os.path.join(openet_daily_dir, f"{fid}.csv")
+    if not os.path.exists(path):
+        return {}
+
+    df = pd.read_csv(path, index_col="DATE", parse_dates=True)
+
+    et_by_model = {}
+    for raw_col, model_name in VOLK_COLUMN_MAP.items():
+        if raw_col in df.columns:
+            et_by_model[model_name] = df[raw_col].astype(float)
+
+    return et_by_model
 
 
 def calc_metrics(obs, mod):
@@ -190,12 +224,39 @@ def calc_metrics(obs, mod):
     return {"n": len(obs), "r2": r2, "r": r, "rmse": rmse, "bias": bias}
 
 
-def evaluate(cfg, container, par_csv, fids, flux_dir):
+def _get_diy_openet(container, fid, irr_data, etref):
+    """DIY: interpolate our sparse ETf to daily, then multiply by daily ETo.
+
+    Returns {model_name: pd.Series} of daily ET (interpolated ETf × ETo).
+    """
+    etf_by_model = load_openet_etf(container, fid, irr_data)
+    et_daily = {}
+    for model_name, etf_series in etf_by_model.items():
+        etf_interp = etf_series.interpolate(method="linear")
+        et_daily[model_name] = etf_interp * etref
+    return et_daily
+
+
+def _get_volk_openet(fid, openet_daily_dir):
+    """Volk: load pre-computed daily ET from OpenET 3x3 CSVs.
+
+    Returns {model_name: pd.Series} of sparse ET (already mm/day on Landsat dates).
+    """
+    return load_volk_openet_et(fid, openet_daily_dir)
+
+
+def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
     """Run calibrated model and evaluate against flux tower ET and OpenET models.
+
+    Parameters
+    ----------
+    openet_source : str
+        'diy' — use our own ETf extracts from the container (ETf × ETo).
+        'volk' — use Volk OpenET 3x3 daily ET extractions (already mm/day).
 
     Returns DataFrame with per-field metrics for SWIM and each OpenET model.
     """
-    print(f"Evaluating {len(fids)} fields from {par_csv}")
+    print(f"Evaluating {len(fids)} fields from {par_csv} (openet_source={openet_source})")
 
     # Load irrigation data from container
     irr_data = {}
@@ -206,6 +267,9 @@ def evaluate(cfg, container, par_csv, fids, flux_dir):
                 irr_data[fid] = props[fid]["irr"]
     except Exception:
         pass
+
+    if openet_source == "volk":
+        openet_daily_dir = os.path.join(cfg.data_dir, "openet_flux", "daily_data")
 
     calibrated_params = parse_pest_params(par_csv, fids)
     missing = [f for f in fids if f not in calibrated_params]
@@ -241,19 +305,26 @@ def evaluate(cfg, container, par_csv, fids, flux_dir):
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_swim"] = m[k]
 
-        # Per-model OpenET metrics (ET = ETf × ETo on capture dates)
-        etf_by_model = load_openet_etf(container, fid, irr_data)
-        model_et_on_common = {}
+        # Per-model OpenET metrics
+        if openet_source == "diy":
+            # DIY returns daily ET (already interpolated ETf × ETo)
+            et_daily_by_model = _get_diy_openet(container, fid, irr_data, etref)
+        else:
+            # Volk returns sparse ET on Landsat dates; interpolate to daily
+            et_sparse_by_model = _get_volk_openet(fid, openet_daily_dir)
+            et_daily_by_model = {}
+            for mn, s in et_sparse_by_model.items():
+                et_daily_by_model[mn] = s.interpolate(method="linear")
 
+        model_et_on_common = {}
         for model_name in OPEN_SOURCE_MODELS:
-            if model_name not in etf_by_model:
+            if model_name not in et_daily_by_model:
                 for k in ["r2", "r", "rmse", "bias"]:
                     row[f"{k}_{model_name}"] = np.nan
                 continue
 
-            etf_series = etf_by_model[model_name]
-            et_series = etf_series * etref
-            et_on_common = et_series.reindex(common)
+            et_daily = et_daily_by_model[model_name]
+            et_on_common = et_daily.reindex(common)
 
             valid = np.isfinite(et_on_common.values) & np.isfinite(obs)
             if valid.sum() >= 10:
@@ -265,7 +336,7 @@ def evaluate(cfg, container, par_csv, fids, flux_dir):
             for k in ["r2", "r", "rmse", "bias"]:
                 row[f"{k}_{model_name}"] = m[k]
 
-        # Open-source ensemble (nanmean of available models)
+        # Open-source ensemble (nanmean of interpolated models)
         if model_et_on_common:
             stack = np.column_stack(list(model_et_on_common.values()))
             ensemble_et = np.nanmean(stack, axis=1)
@@ -290,10 +361,13 @@ def evaluate(cfg, container, par_csv, fids, flux_dir):
 
     metrics_df = pd.DataFrame(rows).set_index("fid")
 
-    # Aggregate summary
+    # Aggregate summary — only sites where both SWIM and ensemble have metrics
     all_models = ["swim"] + OPEN_SOURCE_MODELS + ["ensemble"]
+    has_both = metrics_df["r2_swim"].notna() & metrics_df["r2_ensemble"].notna()
+    common_df = metrics_df.loc[has_both]
+
     print("\n" + "=" * 80)
-    print(f"AGGREGATE ({len(metrics_df)} fields)")
+    print(f"AGGREGATE ({len(common_df)} fields with both SWIM and ensemble estimates)")
     print("=" * 80)
     header = f"{'model':<12}"
     for stat in ["r2", "r", "rmse", "bias"]:
@@ -305,14 +379,159 @@ def evaluate(cfg, container, par_csv, fids, flux_dir):
         line = f"{model_name:<12}"
         for stat in ["r2", "r", "rmse", "bias"]:
             col = f"{stat}_{model_name}"
-            if col in metrics_df.columns:
-                vals = metrics_df[col].dropna()
+            if col in common_df.columns:
+                vals = common_df[col].dropna()
                 line += f"  {vals.mean():>10.3f}  {vals.median():>10.3f}"
             else:
                 line += f"  {'n/a':>10}  {'n/a':>10}"
         print(line)
 
     return metrics_df
+
+
+def evaluate_etf(cfg, container, par_csv, fids):
+    """Compare SWIM ETf against OpenET ETf from the container at capture dates.
+
+    Runs the calibrated model and compares predicted ETf directly against
+    per-model ETf observations stored in the container (at Landsat overpass
+    dates only).  This isolates model skill from ETo conversion issues.
+
+    Returns DataFrame with per-field, per-model ETf metrics.
+    """
+    print(f"ETf evaluation: {len(fids)} fields from {par_csv}")
+
+    calibrated_params = parse_pest_params(par_csv, fids)
+    model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
+
+    # Load irrigation data for mask selection
+    irr_data = {}
+    try:
+        props = container.query.properties()
+        for fid in fids:
+            if fid in props and "irr" in props[fid]:
+                irr_data[fid] = props[fid]["irr"]
+    except Exception:
+        pass
+
+    rows = []
+    for fid in fids:
+        if fid not in model_results:
+            continue
+        swim_etf = model_results[fid]["etf_model"]
+
+        # Determine irrigated years for mask selection
+        field_irr = irr_data.get(fid, {})
+        irr_years = set()
+        for k, v in field_irr.items():
+            if k == "fallow_years":
+                continue
+            try:
+                if isinstance(v, dict) and v.get("f_irr", 0.0) >= IRR_THRESHOLD:
+                    irr_years.add(int(k))
+            except (ValueError, TypeError):
+                continue
+
+        for model in OPEN_SOURCE_MODELS:
+            # Load ETf from both masks, combine by year
+            etf_inv = etf_irr = None
+            for mask in ["inv_irr", "irr"]:
+                path = f"remote_sensing/etf/landsat/{model}/{mask}"
+                try:
+                    etf_df = container.query.dataframe(path, fields=[fid])
+                    if fid in etf_df.columns:
+                        series = etf_df[fid]
+                        if mask == "inv_irr":
+                            etf_inv = series
+                        else:
+                            etf_irr = series
+                except Exception:
+                    pass
+
+            if etf_inv is None and etf_irr is None:
+                continue
+
+            # Build combined series using year-appropriate mask.
+            # Fall back to whichever mask has data.
+            inv_valid = etf_inv is not None and etf_inv.dropna().any()
+            irr_valid = etf_irr is not None and etf_irr.dropna().any()
+
+            if inv_valid and irr_valid:
+                combined = etf_inv.copy()
+                if irr_years:
+                    irr_mask = combined.index.year.isin(irr_years)
+                    combined.loc[irr_mask] = etf_irr.loc[irr_mask]
+            elif irr_valid:
+                combined = etf_irr
+            elif inv_valid:
+                combined = etf_inv
+            else:
+                continue
+
+            obs_etf = combined.dropna()
+            obs_etf = obs_etf[obs_etf > 0]
+            if len(obs_etf) < 10:
+                continue
+
+            common = swim_etf.index.intersection(obs_etf.index)
+            if len(common) < 10:
+                continue
+
+            s = swim_etf.loc[common].values
+            o = obs_etf.loc[common].values
+            valid = np.isfinite(s) & np.isfinite(o)
+            s, o = s[valid], o[valid]
+            if len(s) < 10:
+                continue
+
+            m = calc_metrics(o, s)
+            rows.append({"fid": fid, "model": model, **m})
+
+    if not rows:
+        print("No fields with sufficient ETf data.")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
+    # Per-field summary (median across models)
+    by_fid = df.groupby("fid").agg(
+        n=("n", "sum"),
+        r2_median=("r2", "median"),
+        rmse_median=("rmse", "median"),
+        bias_median=("bias", "median"),
+    )
+
+    # Per-model summary
+    print("\n" + "=" * 70)
+    print("ETf: SWIM vs OpenET (at Landsat capture dates)")
+    print("=" * 70)
+    header = f"{'model':<12}  {'combos':>6}  {'r2_mean':>8}  {'r2_med':>8}  {'rmse_mean':>10}  {'bias_mean':>10}"
+    print(header)
+    print("-" * len(header))
+    for model in OPEN_SOURCE_MODELS:
+        sub = df[df["model"] == model]
+        if sub.empty:
+            continue
+        print(
+            f"{model:<12}  {len(sub):>6}  {sub['r2'].mean():>8.3f}  "
+            f"{sub['r2'].median():>8.3f}  {sub['rmse'].mean():>10.3f}  "
+            f"{sub['bias'].mean():>10.3f}"
+        )
+    print(
+        f"{'ALL':<12}  {len(df):>6}  {df['r2'].mean():>8.3f}  "
+        f"{df['r2'].median():>8.3f}  {df['rmse'].mean():>10.3f}  "
+        f"{df['bias'].mean():>10.3f}"
+    )
+
+    # Worst / best fields
+    ranked = by_fid.sort_values("r2_median")
+    print("\nWorst 10 fields (median R2 across models):")
+    for fid, row in ranked.head(10).iterrows():
+        print(f"  {fid:<20} R2={row['r2_median']:.3f}  RMSE={row['rmse_median']:.3f}")
+    print("\nBest 10 fields:")
+    for fid, row in ranked.tail(10).iterrows():
+        print(f"  {fid:<20} R2={row['r2_median']:.3f}  RMSE={row['rmse_median']:.3f}")
+
+    return df
 
 
 def find_par_csv(results_dir, project_name):
@@ -334,10 +553,28 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sites", type=str, default=None, help="Comma-separated site IDs (default: all)"
     )
+    parser.add_argument(
+        "--openet-source",
+        type=str,
+        choices=["diy", "volk"],
+        default="volk",
+        help="'diy' = our ETf extracts × ETo, 'volk' = OpenET 3x3 daily ET CSVs",
+    )
+    parser.add_argument(
+        "--etf",
+        action="store_true",
+        help="Compare SWIM ETf vs OpenET ETf at capture dates (instead of ET vs flux)",
+    )
+    parser.add_argument(
+        "--container",
+        type=str,
+        default=None,
+        help="Override container path (default: derived from config)",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
-    flux_dir = os.path.join(cfg.data_dir, "flux")
+    flux_dir = os.path.join(cfg.data_dir, "daily_flux_files")
     results_dir = os.path.join(cfg.project_ws, "results")
 
     if args.par_csv:
@@ -348,7 +585,10 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"No .par.csv found in {results_dir}")
     print(f"Using parameters: {par_csv}")
 
-    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+    if args.container:
+        container_path = args.container
+    else:
+        container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
     container = SwimContainer.open(container_path, mode="r")
 
     if args.sites:
@@ -357,8 +597,12 @@ if __name__ == "__main__":
         fids = container.field_uids
 
     try:
-        metrics = evaluate(cfg, container, par_csv, fids, flux_dir)
-        out_csv = os.path.join(results_dir, "evaluation_metrics.csv")
+        if args.etf:
+            metrics = evaluate_etf(cfg, container, par_csv, fids)
+            out_csv = os.path.join(results_dir, "evaluation_etf_metrics.csv")
+        else:
+            metrics = evaluate(cfg, container, par_csv, fids, flux_dir, args.openet_source)
+            out_csv = os.path.join(results_dir, "evaluation_metrics.csv")
         os.makedirs(results_dir, exist_ok=True)
         metrics.to_csv(out_csv)
         print(f"\nMetrics saved to {out_csv}")
