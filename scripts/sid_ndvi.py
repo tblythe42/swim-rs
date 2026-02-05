@@ -121,7 +121,7 @@ if __name__ == "__main__":
     os.makedirs(root, exist_ok=True)
     sys.setrecursionlimit(5000)
 
-    is_authorized()
+    is_authorized("ee-hoylman")
 
     beg_year = 2024
     end_year = 2025

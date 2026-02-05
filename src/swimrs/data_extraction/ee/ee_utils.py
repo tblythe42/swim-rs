@@ -497,14 +497,14 @@ def as_ee_feature_collection(
     return ee.FeatureCollection(fields)
 
 
-def is_authorized() -> bool:
+def is_authorized(project="ee-dgketchum") -> bool:
     """Initialize the Earth Engine client using the configured project.
 
     Raises a RuntimeError if initialization fails.
     Returns True on success.
     """
     try:
-        ee.Initialize(project="ee-dgketchum")
+        ee.Initialize(project=project)
         return True
     except Exception as e:
         raise RuntimeError(f"Earth Engine authorization failed: {e}")
