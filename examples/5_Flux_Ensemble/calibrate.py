@@ -28,6 +28,7 @@ def run_pest_sequence(
     pdc_remove: bool = False,
     debug_fields: list[str] | None = None,
     ies_num_threads: int | None = None,
+    container_path: str | None = None,
 ):
     project = cfg.project_name
 
@@ -43,7 +44,8 @@ def run_pest_sequence(
 
     os.chdir(Path(__file__).resolve().parent)
 
-    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+    if container_path is None:
+        container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
     container = SwimContainer.open(container_path, mode="r")
 
     builder = PestBuilder(
@@ -137,10 +139,10 @@ if __name__ == "__main__":
 
     cfg = _load_config()
 
-    # Full 60-site production run
+    # Case B: 60-site EE, 2016-2024, 4-model ensemble (ptjpl+sims+ssebop+geesebal)
     DEBUG_FIELDS = None
 
-    results = os.path.join(cfg.project_ws, "results")
+    results = os.path.join(cfg.project_ws, "results", "case_b_60site_ee_9yr")
     t0 = time.time()
     run_pest_sequence(
         cfg,

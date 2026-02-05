@@ -252,7 +252,12 @@ def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
 
 if __name__ == "__main__":
     config = _load_config()
-    select_sites = gpd.read_file(config.fields_shapefile)["side_id"].to_list()
+    gdf = gpd.read_file(config.fields_shapefile)
+    if config.feature_id_col not in gdf.columns:
+        raise ValueError(
+            f"Feature ID column {config.feature_id_col!r} not found in {config.fields_shapefile}"
+        )
+    select_sites = gdf[config.feature_id_col].astype(str).to_list()
 
     # Standard extraction workflow
     # extract_snodas(config)
