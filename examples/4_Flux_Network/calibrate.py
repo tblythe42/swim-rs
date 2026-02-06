@@ -141,19 +141,35 @@ def run_pest_sequence(
 
 
 if __name__ == "__main__":
+    import argparse
     import time
+
+    parser = argparse.ArgumentParser(description="Calibrate 4_Flux_Network with PEST++ IES")
+    parser.add_argument(
+        "--sites", type=str, default=None, help="Comma-separated site IDs (debug subset)"
+    )
+    parser.add_argument(
+        "--pdc-remove", action="store_true", default=True, help="Run PDC removal pass"
+    )
+    parser.add_argument("--workers", type=int, default=None, help="Override worker count")
+    args = parser.parse_args()
 
     cfg = _load_config()
 
-    DEBUG_FIELDS = None
+    debug_fields = None
+    if args.sites:
+        debug_fields = [s.strip() for s in args.sites.split(",")]
+
+    if args.workers:
+        cfg.workers = args.workers
 
     results = os.path.join(cfg.project_ws, "results")
     t0 = time.time()
     run_pest_sequence(
         cfg,
         results,
-        pdc_remove=True,
-        debug_fields=DEBUG_FIELDS,
+        pdc_remove=args.pdc_remove,
+        debug_fields=debug_fields,
     )
     elapsed = time.time() - t0
     print(f"\nTotal elapsed: {elapsed:.1f} s ({elapsed / 60:.1f} min)")

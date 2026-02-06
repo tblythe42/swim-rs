@@ -71,6 +71,35 @@ def build_shapefile(cfg: ProjectConfig, overwrite: bool = False):
     print(f"  Created {len(gdf)} stations → {output_shp}")
 
 
+def build_gridmet_mapping(cfg: ProjectConfig, overwrite: bool = False):
+    """Create the GridMET mapping shapefile (flux_fields_gfid.shp).
+
+    This spatial-joins the fields shapefile with GridMET centroids so that
+    each site_id gets a GFID (GridMET cell ID).  The resulting shapefile is
+    required by ``ingest_meteorology`` to look up parquet files by GFID.
+
+    Args:
+        cfg: ProjectConfig instance.
+        overwrite: Replace an existing mapping shapefile.
+    """
+    from swimrs.data_extraction.gridmet.gridmet import assign_gridmet_ids
+
+    mapping_shp = cfg.gridmet_mapping_shp
+    if os.path.exists(mapping_shp) and not overwrite:
+        print(f"GridMET mapping already exists: {mapping_shp}")
+        return
+
+    print("\n=== Building GridMET mapping shapefile ===")
+    assign_gridmet_ids(
+        fields=cfg.fields_shapefile,
+        fields_join=mapping_shp,
+        gridmet_points=cfg.gridmet_centroids,
+        feature_id=cfg.feature_id_col,
+        gridmet_id_col=cfg.gridmet_id_col,
+    )
+    print(f"  Created mapping → {mapping_shp}")
+
+
 def create_project_container(cfg: ProjectConfig = None, overwrite: bool = False) -> SwimContainer:
     """
     Create a new SwimContainer for this project.
@@ -121,13 +150,11 @@ def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig, overwrite: 
         print("GridMET data already ingested, skipping")
         return
 
-    # GridMET parquet files are named by grid cell ID (GFID), not by station UID,
-    # so we must provide the mapping shapefile that links site_id → GFID.
+    # Parquet files are named by site_id (e.g. US-ARM.parquet) — each flux
+    # site has its own file, so we use direct mode (no grid mapping).
     container.ingest.gridmet(
         source_dir=cfg.met_dir,
-        grid_shapefile=cfg.gridmet_mapping_shp,
         uid_column=cfg.feature_id_col,
-        grid_column="GFID",
         variables=[
             "eto",
             "etr",
