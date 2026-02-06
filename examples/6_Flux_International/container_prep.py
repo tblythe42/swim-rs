@@ -112,7 +112,11 @@ def ingest_ndvi(
 
 
 def ingest_etf(container: SwimContainer, cfg: ProjectConfig):
-    """Ingest ETf data (PT-JPL model for international)."""
+    """Ingest ETf data (PT-JPL model for international).
+
+    Ingests Landsat PT-JPL ETf and, if available, ECOSTRESS ETf
+    (pre-converted from daily ET via ecostress_etf_convert.py).
+    """
     etf_model = cfg.etf_target_model  # 'ptjpl'
 
     # Landsat ETf
@@ -129,7 +133,21 @@ def ingest_etf(container: SwimContainer, cfg: ProjectConfig):
     else:
         print(f"  WARNING: Landsat ETf directory not found: {landsat_etf_dir}")
 
-    # ECOSTRESS: Data is daily ET (not ETf), would need ETo division - skipping for now
+    # ECOSTRESS ETf (converted from daily ET by ecostress_etf_convert.py)
+    ecostress_etf_dir = Path(cfg.ecostress_dir) / "extracts" / "etf" / "no_mask"
+    if ecostress_etf_dir.exists():
+        print(f"Ingesting ECOSTRESS ETf from: {ecostress_etf_dir}")
+        container.ingest.etf(
+            source_dir=str(ecostress_etf_dir),
+            uid_column=cfg.feature_id_col,
+            model=etf_model,
+            instrument="ecostress",
+            mask="no_mask",
+        )
+    else:
+        print(
+            f"  NOTE: ECOSTRESS ETf not found at {ecostress_etf_dir} (run ecostress_etf_convert.py first)"
+        )
 
 
 def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig):

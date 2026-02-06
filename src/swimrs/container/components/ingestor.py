@@ -82,6 +82,12 @@ def _parse_single_csv(
                 if len(date_str) == 8 and date_str.isdigit():
                     dates.append(pd.to_datetime(date_str))
                     data_cols.append(col)
+            elif instrument == "ecostress":
+                parts = col.split("_")
+                date_str = parts[-1]
+                if len(date_str) == 8 and date_str.isdigit():
+                    dates.append(pd.to_datetime(date_str))
+                    data_cols.append(col)
         except Exception:
             continue
 

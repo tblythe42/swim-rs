@@ -22,11 +22,14 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error, r2_score
 
-from swimrs.calibrate.flux_utils import get_flux_sites
 from swimrs.container import SwimContainer
 from swimrs.process.input import build_swim_input
 from swimrs.process.loop import run_daily_loop
 from swimrs.swim.config import ProjectConfig
+
+# QAQC flux data is organized by network
+QAQC_ROOT = "/nas/climate/flux_stations/qaqc"
+QAQC_NETWORKS = ["ameriflux", "fluxnet", "icos", "ozflux"]
 
 
 def output_to_dataframe(output, swim_input, field_idx: int) -> pd.DataFrame:
@@ -122,6 +125,31 @@ def run_flux_site(fid: str, cfg: ProjectConfig, container: SwimContainer, outfil
     df.to_csv(outfile)
 
 
+def find_flux_file(site_id: str, flux_dir: str = None) -> str | None:
+    """Find QAQC flux data file for a site, searching across networks.
+
+    Looks first in a local flux_dir (if provided), then across the
+    QAQC network directories on /nas/.
+
+    Returns path to daily_data CSV or None.
+    """
+    fname = f"{site_id}_daily_data.csv"
+
+    # Check local directory first
+    if flux_dir:
+        local = os.path.join(flux_dir, fname)
+        if os.path.exists(local):
+            return local
+
+    # Search QAQC network directories
+    for network in QAQC_NETWORKS:
+        path = os.path.join(QAQC_ROOT, network, fname)
+        if os.path.exists(path):
+            return path
+
+    return None
+
+
 def compare_with_flux(fid: str, model_output: str, flux_file: str, return_comparison: bool = False):
     """Compare model output against flux tower observations.
 
@@ -142,7 +170,7 @@ def compare_with_flux(fid: str, model_output: str, flux_file: str, return_compar
         # Load model output
         model_df = pd.read_csv(model_output, index_col=0, parse_dates=True)
 
-        # Load flux data (assumes 'ET' or 'LE' column exists)
+        # Load flux data
         flux_df = pd.read_csv(flux_file, index_col="date", parse_dates=True)
 
         # Find common dates
@@ -151,17 +179,19 @@ def compare_with_flux(fid: str, model_output: str, flux_file: str, return_compar
             print(f"  Insufficient overlapping data ({len(common_idx)} days)")
             return None
 
-        # Get ET values (model uses 'et_act', flux may use 'ET' or 'LE_corr')
+        # Get ET values: prefer energy-balance-corrected ET
         model_et = model_df.loc[common_idx, "et_act"]
 
-        if "ET" in flux_df.columns:
+        if "ET_corr" in flux_df.columns:
+            flux_et = flux_df.loc[common_idx, "ET_corr"]
+        elif "ET" in flux_df.columns:
             flux_et = flux_df.loc[common_idx, "ET"]
         elif "LE_corr" in flux_df.columns:
             # Convert latent heat flux to ET (mm/day)
             # LE (W/m2) * 86400 / 2.45e6 = ET (mm/day)
             flux_et = flux_df.loc[common_idx, "LE_corr"] * 86400 / 2.45e6
         else:
-            print("  No ET or LE column in flux file")
+            print("  No ET/ET_corr/LE_corr column in flux file")
             return None
 
         # Drop NaN values
@@ -177,17 +207,21 @@ def compare_with_flux(fid: str, model_output: str, flux_file: str, return_compar
         rmse = np.sqrt(mean_squared_error(flux_et, model_et))
         r2 = r2_score(flux_et, model_et)
         bias = (model_et - flux_et).mean()
+        kge = _kling_gupta(model_et.values, flux_et.values)
 
         comparison = {
             "n_samples": len(model_et),
             "rmse": rmse,
             "r2": r2,
             "bias": bias,
+            "kge": kge,
             "mean_flux": flux_et.mean(),
             "mean_model": model_et.mean(),
         }
 
-        print(f"  n={comparison['n_samples']}, RMSE={rmse:.2f}, R2={r2:.3f}, Bias={bias:.2f}")
+        print(
+            f"  n={comparison['n_samples']}, RMSE={rmse:.2f}, R2={r2:.3f}, Bias={bias:.2f}, KGE={kge:.3f}"
+        )
 
         if return_comparison:
             return comparison
@@ -196,6 +230,14 @@ def compare_with_flux(fid: str, model_output: str, flux_file: str, return_compar
     except Exception as exc:
         print(f"  Error comparing {fid}: {exc}")
         return None
+
+
+def _kling_gupta(sim: np.ndarray, obs: np.ndarray) -> float:
+    """Compute Kling-Gupta Efficiency (KGE)."""
+    r = np.corrcoef(sim, obs)[0, 1]
+    alpha = np.std(sim) / np.std(obs)
+    beta = np.mean(sim) / np.mean(obs)
+    return 1.0 - np.sqrt((r - 1.0) ** 2 + (alpha - 1.0) ** 2 + (beta - 1.0) ** 2)
 
 
 if __name__ == "__main__":
@@ -230,23 +272,13 @@ if __name__ == "__main__":
     cfg = ProjectConfig()
     cfg.read_config(str(conf))
 
-    # Try to load station metadata if available
-    station_metadata = os.path.join(cfg.data_dir, "station_metadata.csv")
-    if os.path.exists(station_metadata):
-        all_sites, sdf = get_flux_sites(station_metadata, crop_only=False, return_df=True)
-    else:
-        # Use all sites from container
-        all_sites = None
-        sdf = None
-
-    # Filter sites if specified
+    # Filter sites if specified via CLI, otherwise use container
     if args.sites:
         sites = [s.strip() for s in args.sites.split(",")]
-    elif all_sites is not None:
-        sites = all_sites
     else:
-        sites = None  # Will be populated from container
+        sites = None
 
+    # Local flux directory (if data has been copied there)
     flux_dir = os.path.join(cfg.data_dir, "daily_flux_files")
 
     # Use output-dir if specified, otherwise default to project_ws/results
@@ -266,7 +298,6 @@ if __name__ == "__main__":
 
     container = SwimContainer.open(container_path, mode="r")
 
-    # If no sites from metadata or CLI, use container field UIDs
     if sites is None:
         sites = container.field_uids
 
@@ -275,10 +306,9 @@ if __name__ == "__main__":
 
     try:
         for i, site_id in enumerate(sites):
-            lulc = sdf.at[site_id, "General classification"] if sdf is not None else "Unknown"
-            print(f"\n{i} {site_id}: {lulc}")
+            print(f"\n{i} {site_id}")
 
-            flux_file = os.path.join(flux_dir, f"{site_id}_daily_data.csv")
+            flux_file = find_flux_file(site_id, flux_dir=flux_dir)
             out_csv = os.path.join(run_dir, f"{site_id}.csv")
 
             try:
@@ -288,9 +318,12 @@ if __name__ == "__main__":
                 incomplete.append(site_id)
                 continue
 
-            result = compare_with_flux(site_id, out_csv, flux_file, return_comparison=True)
-            if result:
-                results.append((site_id, result))
+            if flux_file:
+                result = compare_with_flux(site_id, out_csv, flux_file, return_comparison=True)
+                if result:
+                    results.append((site_id, result))
+            else:
+                print(f"  No flux data found for {site_id}")
             complete.append(site_id)
 
         print(f"\n{'=' * 60}")
@@ -301,8 +334,16 @@ if __name__ == "__main__":
             print("\nSummary Statistics:")
             rmses = [r[1]["rmse"] for r in results]
             r2s = [r[1]["r2"] for r in results]
+            kges = [r[1]["kge"] for r in results]
             print(f"  Mean RMSE: {np.mean(rmses):.2f} mm/day")
             print(f"  Mean R2: {np.mean(r2s):.3f}")
+            print(f"  Mean KGE: {np.mean(kges):.3f}")
+
+            # Save results summary
+            results_csv = os.path.join(run_dir, "evaluation_summary.csv")
+            rows = [{"site": s, **m} for s, m in results]
+            pd.DataFrame(rows).to_csv(results_csv, index=False)
+            print(f"  Saved to: {results_csv}")
 
     finally:
         container.close()
