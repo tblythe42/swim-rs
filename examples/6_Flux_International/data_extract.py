@@ -123,6 +123,9 @@ def extract_etf(conf: ProjectConfig, sites=None, overwrite: bool = False) -> Non
     zonal means for international flux sites where US-specific datasets
     (GRIDMET, IrrMapper) are not available.
 
+    Requires openet-ptjpl >= 0.5.0 with ERA5LAND support (era5land-updates branch):
+        uv pip install -e /home/dgketchum/code/openet-ptjpl
+
     Parameters
     ----------
     conf : ProjectConfig
