@@ -141,7 +141,7 @@ def extract_etf(conf: ProjectConfig, sites=None, overwrite: bool = False) -> Non
     if overwrite:
         chk_dir = None
     else:
-        chk_dir = os.path.join(conf.landsat_dir, "extracts", "ptjpl_etf")
+        chk_dir = os.path.join(conf.landsat_dir, "extracts", "ptjpl_etf", "no_mask")
 
     print(f"\n{'=' * 60}")
     print("Extracting PT-JPL ETf zonal statistics (ERA5LAND)")
@@ -156,19 +156,44 @@ def extract_etf(conf: ProjectConfig, sites=None, overwrite: bool = False) -> Non
         end_yr=conf.end_dt.year,
         check_dir=chk_dir,
         buffer=None,
-        batch_size=60,
+        batch_size=15,
         file_prefix=conf.project_name,
     )
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Extract Earth Engine data for Example 6 (International Flux Sites)."
+    )
+    parser.add_argument("--era5", action="store_true", help="Extract ERA5-Land meteorology")
+    parser.add_argument("--props", action="store_true", help="Extract properties (HWSD + LULC)")
+    parser.add_argument("--ndvi", action="store_true", help="Extract NDVI (Landsat + Sentinel)")
+    parser.add_argument("--etf", action="store_true", help="Extract Landsat PT-JPL ETf")
+    parser.add_argument("--all", action="store_true", help="Run all extraction components")
+    parser.add_argument("--overwrite", action="store_true", help="Re-export even if files exist")
+    parser.add_argument(
+        "--sites", type=str, default=None, help="Comma-separated site IDs to process"
+    )
+
+    args = parser.parse_args()
+
+    if not any([args.era5, args.props, args.ndvi, args.etf, args.all]):
+        parser.print_help()
+        sys.exit(1)
+
     cfg = _load_config()
+    sites = args.sites.split(",") if args.sites else None
 
-    extract_era5land(cfg, overwrite=True)
-    # extract_properties(cfg)
-    # extract_ndvi(cfg, overwrite=False)
+    if args.era5 or args.all:
+        extract_era5land(cfg, overwrite=args.overwrite)
 
-    # PT-JPL ETf extraction using ERA5LAND meteorology
-    # extract_etf(cfg, overwrite=True)
+    if args.props or args.all:
+        extract_properties(cfg)
 
-# ========================= EOF ====================================================================
+    if args.ndvi or args.all:
+        extract_ndvi(cfg, overwrite=args.overwrite)
+
+    if args.etf or args.all:
+        extract_etf(cfg, sites=sites, overwrite=args.overwrite)
