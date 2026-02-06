@@ -1,9 +1,6 @@
 """
 Container-based data preparation workflow for 4_Flux_Network.
 
-This module replicates the functionality of data_prep.py but uses the
-SwimContainer approach instead of the multi-file Parquet/JSON approach.
-
 The container workflow:
     1. Create container from shapefile
     2. Ingest meteorology (GridMET)
@@ -17,7 +14,7 @@ Usage:
     python container_prep.py [--overwrite] [--sites SITE1,SITE2,...] [--skip-sentinel]
 
     # Or use functions directly:
-    from prep_container import create_project_container, prep_all
+    from container_prep import create_project_container, prep_all
     container = create_project_container(overwrite=True)
     prep_all(container)
 """
@@ -27,6 +24,12 @@ from pathlib import Path
 
 from swimrs.container import SwimContainer, create_container, open_container
 from swimrs.swim.config import ProjectConfig
+from swimrs.utils.flux_stations import create_master_shapefile
+
+# Canonical source data (shipped with the repo)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_FOOTPRINTS_SHP = _REPO_ROOT / "examples" / "data" / "flux_footprints_3p_clean.shp"
+_METADATA_CSV = _REPO_ROOT / "examples" / "data" / "station_metadata.csv"
 
 
 def _load_config() -> ProjectConfig:
@@ -35,8 +38,37 @@ def _load_config() -> ProjectConfig:
     conf = project_dir / "4_Flux_Network.toml"
 
     cfg = ProjectConfig()
-    cfg.read_config(str(conf))
+    if os.path.isdir("/data/ssd1/swim"):
+        cfg.read_config(str(conf))
+    else:
+        cfg.read_config(str(conf), project_root_override=str(project_dir.parent))
     return cfg
+
+
+def build_shapefile(cfg: ProjectConfig, overwrite: bool = False):
+    """Regenerate the flux fields shapefile from canonical repo data.
+
+    Builds a master shapefile from shipped footprints and metadata (all
+    land-cover types, no classification filter).
+
+    Args:
+        cfg: ProjectConfig instance.
+        overwrite: Replace an existing shapefile.
+    """
+    output_shp = cfg.fields_shapefile
+    if os.path.exists(output_shp) and not overwrite:
+        print(f"Shapefile already exists: {output_shp}")
+        return
+
+    os.makedirs(os.path.dirname(output_shp), exist_ok=True)
+    print("\n=== Building flux fields shapefile (all land covers) ===")
+    print(f"  Footprints: {_FOOTPRINTS_SHP}")
+    print(f"  Metadata:   {_METADATA_CSV}")
+
+    gdf = create_master_shapefile(
+        str(_FOOTPRINTS_SHP), str(_METADATA_CSV), output_shp, overwrite=overwrite
+    )
+    print(f"  Created {len(gdf)} stations → {output_shp}")
 
 
 def create_project_container(cfg: ProjectConfig = None, overwrite: bool = False) -> SwimContainer:
@@ -53,7 +85,7 @@ def create_project_container(cfg: ProjectConfig = None, overwrite: bool = False)
     if cfg is None:
         cfg = _load_config()
 
-    container_path = os.path.join(cfg.project_ws, f"{cfg.project_name}.swim")
+    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
 
     if os.path.exists(container_path) and not overwrite:
         print(f"Opening existing container: {container_path}")
@@ -77,8 +109,6 @@ def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig, overwrite: 
     """
     Ingest GridMET meteorology data into the container.
 
-    Corresponds to: prep_timeseries() meteorology portion
-
     Args:
         container: SwimContainer instance
         cfg: ProjectConfig instance
@@ -91,10 +121,13 @@ def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig, overwrite: 
         print("GridMET data already ingested, skipping")
         return
 
-    # Ingest GridMET with all available variables
-    # Direct mode: parquet files named by site_id (e.g., US-FPe.parquet)
+    # GridMET parquet files are named by grid cell ID (GFID), not by station UID,
+    # so we must provide the mapping shapefile that links site_id → GFID.
     container.ingest.gridmet(
         source_dir=cfg.met_dir,
+        grid_shapefile=cfg.gridmet_mapping_shp,
+        uid_column=cfg.feature_id_col,
+        grid_column="GFID",
         variables=[
             "eto",
             "etr",
@@ -121,8 +154,6 @@ def ingest_remote_sensing(
     """
     Ingest remote sensing data (NDVI, ETf) into the container.
 
-    Corresponds to: prep_earthengine_extracts()
-
     Args:
         container: SwimContainer instance
         cfg: ProjectConfig instance
@@ -133,7 +164,9 @@ def ingest_remote_sensing(
     print("\n=== Ingesting Remote Sensing ===")
 
     masks = ["irr", "inv_irr"]
-    models = [cfg.etf_target_model] + (cfg.etf_ensemble_members or [])
+    # SSEBop NHM is the sole ETf model for this example
+    models = [cfg.etf_target_model]
+    n_workers = cfg.workers or 1
 
     # Ingest Landsat NDVI
     for mask in masks:
@@ -147,12 +180,16 @@ def ingest_remote_sensing(
                 mask=mask,
                 fields=sites,
                 overwrite=overwrite,
+                workers=n_workers,
             )
 
     # Ingest Sentinel NDVI
     if add_sentinel:
         for mask in masks:
-            ndvi_dir = os.path.join(cfg.sentinel_dir, "extracts", "ndvi", mask)
+            sentinel_dir = getattr(cfg, "sentinel_dir", None)
+            if sentinel_dir is None:
+                sentinel_dir = cfg.landsat_dir.replace("landsat", "sentinel")
+            ndvi_dir = os.path.join(sentinel_dir, "extracts", "ndvi", mask)
             if os.path.isdir(ndvi_dir):
                 print(f"Ingesting Sentinel NDVI ({mask})...")
                 container.ingest.ndvi(
@@ -162,6 +199,7 @@ def ingest_remote_sensing(
                     mask=mask,
                     fields=sites,
                     overwrite=overwrite,
+                    workers=n_workers,
                 )
 
     # Ingest ETf for each model
@@ -178,14 +216,13 @@ def ingest_remote_sensing(
                     mask=mask,
                     fields=sites,
                     overwrite=overwrite,
+                    workers=n_workers,
                 )
 
 
 def ingest_snow(container: SwimContainer, cfg: ProjectConfig, overwrite: bool = False):
     """
     Ingest SNODAS snow data into the container.
-
-    Corresponds to: prep_snow()
 
     Args:
         container: SwimContainer instance
@@ -198,7 +235,6 @@ def ingest_snow(container: SwimContainer, cfg: ProjectConfig, overwrite: bool = 
         print("SNODAS data already ingested, skipping")
         return
 
-    # Ingest directly from extracts directory
     if cfg.snodas_in_dir and os.path.isdir(cfg.snodas_in_dir):
         container.ingest.snodas(
             source_dir=cfg.snodas_in_dir,
@@ -213,8 +249,6 @@ def ingest_properties(container: SwimContainer, cfg: ProjectConfig, overwrite: b
     """
     Ingest field properties (soils, LULC, irrigation) into the container.
 
-    Corresponds to: prep_field_properties()
-
     Args:
         container: SwimContainer instance
         cfg: ProjectConfig instance
@@ -222,7 +256,6 @@ def ingest_properties(container: SwimContainer, cfg: ProjectConfig, overwrite: b
     """
     print("\n=== Ingesting Properties ===")
 
-    # Build properties from individual sources
     container.ingest.properties(
         soils_csv=cfg.ssurgo_csv,
         lulc_csv=cfg.lulc_csv,
@@ -234,20 +267,16 @@ def ingest_properties(container: SwimContainer, cfg: ProjectConfig, overwrite: b
 
 def compute_fused_ndvi(container: SwimContainer, overwrite: bool = False):
     """
-    Compute merged NDVI from Landsat and Sentinel observations.
-
-    Combines Landsat and Sentinel NDVI with Landsat as the preferred source.
+    Compute fused NDVI from Landsat and Sentinel observations.
 
     Args:
         container: SwimContainer instance
-        overwrite: If True, replace existing merged NDVI
+        overwrite: If True, replace existing fused NDVI
     """
-    print("\n=== Computing Merged NDVI ===")
+    print("\n=== Computing Fused NDVI ===")
 
-    container.compute.merged_ndvi(
+    container.compute.fused_ndvi(
         masks=("irr", "inv_irr"),
-        instruments=("landsat", "sentinel"),
-        preference_order=("landsat", "sentinel"),
         overwrite=overwrite,
     )
 
@@ -255,8 +284,6 @@ def compute_fused_ndvi(container: SwimContainer, overwrite: bool = False):
 def compute_dynamics(container: SwimContainer, cfg: ProjectConfig, overwrite: bool = False):
     """
     Compute irrigation, groundwater subsidy, and K parameters.
-
-    Corresponds to: prep_dynamics()
 
     Args:
         container: SwimContainer instance
@@ -268,7 +295,7 @@ def compute_dynamics(container: SwimContainer, cfg: ProjectConfig, overwrite: bo
     container.compute.dynamics(
         etf_model=cfg.etf_target_model,
         masks=("irr", "inv_irr"),
-        irr_threshold=cfg.irrigation_threshold or 0.1,
+        irr_threshold=cfg.irrigation_threshold or 0.3,
         use_mask=True,
         use_lulc=False,
         lookback=5,
@@ -295,6 +322,9 @@ def prep_all(
     """
     if cfg is None:
         cfg = _load_config()
+
+    # Step 0: Rebuild shapefile from canonical repo data
+    build_shapefile(cfg, overwrite=overwrite)
 
     # Step 1: Ingest meteorology
     ingest_meteorology(container, cfg, overwrite=overwrite)
@@ -368,5 +398,5 @@ if __name__ == "__main__":
     container.close()
 
     print(f"\nContainer saved to: {container.path}")
-    print("\nTo use with the model:")
-    print("  Use build_swim_input() from swimrs.process.input to generate swim_input.h5")
+    print("\nTo run the model:")
+    print("  python run.py --site US-ARM")

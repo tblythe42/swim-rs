@@ -1,0 +1,159 @@
+"""Calibration for 4_Flux_Network using PEST++ IES.
+
+Usage:
+    python calibrate.py [--sites SITE1,SITE2,...] [--pdc-remove] [--workers N]
+"""
+
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+from swimrs.calibrate.pest_builder import PestBuilder
+from swimrs.calibrate.run_pest import run_pst
+from swimrs.container import SwimContainer
+from swimrs.swim.config import ProjectConfig
+
+
+def _load_config() -> ProjectConfig:
+    project_dir = Path(__file__).resolve().parent
+    conf = project_dir / "4_Flux_Network.toml"
+
+    cfg = ProjectConfig()
+    if os.path.isdir("/data/ssd1/swim"):
+        cfg.read_config(str(conf), calibrate=True)
+    else:
+        cfg.read_config(str(conf), project_root_override=str(project_dir.parent), calibrate=True)
+
+    return cfg
+
+
+def run_pest_sequence(
+    cfg: ProjectConfig,
+    results_dir: str,
+    pdc_remove: bool = False,
+    debug_fields: list[str] | None = None,
+    ies_num_threads: int | None = None,
+    container_path: str | None = None,
+):
+    project = cfg.project_name
+
+    if os.path.isdir(cfg.pest_run_dir):
+        shutil.rmtree(cfg.pest_run_dir)
+    os.makedirs(cfg.pest_run_dir, exist_ok=False)
+
+    os.makedirs(results_dir, exist_ok=True)
+
+    p_dir = os.path.join(cfg.pest_run_dir, "pest")
+    m_dir = os.path.join(cfg.pest_run_dir, "master")
+    w_dir = os.path.join(cfg.pest_run_dir, "workers")
+
+    os.chdir(Path(__file__).resolve().parent)
+
+    if container_path is None:
+        container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+    container = SwimContainer.open(container_path, mode="r")
+
+    builder = PestBuilder(
+        cfg,
+        container,
+        use_existing=False,
+        python_script=getattr(cfg, "python_script", None),
+        conflicted_obs=None,
+    )
+
+    if debug_fields is not None:
+        missing = [f for f in debug_fields if f not in builder.plot_order]
+        if missing:
+            raise ValueError(f"Debug fields not in container: {missing}")
+        builder.plot_order = debug_fields
+        builder.pest_args = builder.get_pest_builder_args()
+        print(f"DEBUG: limiting to {len(debug_fields)} fields: {debug_fields}")
+
+    # Spinup must run before build_pest so that _build_swim_input can
+    # bake the spinup state into swim_input.h5 for workers.
+    builder.spinup(overwrite=True)
+    shutil.copyfile(builder.config.spinup, os.path.join(results_dir, "spinup.json"))
+
+    builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
+    builder.build_localizer()
+
+    exe_ = "pestpp-ies"
+
+    if pdc_remove:
+        builder.write_control_settings(noptmax=-1, reals=5)
+    else:
+        builder.write_control_settings(noptmax=0)
+
+    builder.dry_run(exe_)
+
+    pdc_file = os.path.join(p_dir, f"{project}.pdc.csv")
+    if os.path.exists(pdc_file) and pdc_remove:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_pdc = os.path.join(temp_dir, f"{project}.pdc.csv")
+            shutil.copyfile(pdc_file, temp_pdc)
+
+            builder = PestBuilder(
+                cfg,
+                container,
+                use_existing=False,
+                python_script=getattr(cfg, "python_script", None),
+                conflicted_obs=temp_pdc,
+            )
+            if debug_fields is not None:
+                builder.plot_order = debug_fields
+                builder.pest_args = builder.get_pest_builder_args()
+            builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
+            builder.build_localizer()
+            builder.write_control_settings(noptmax=0)
+            builder.dry_run(exe_)
+
+    reals = 20 if debug_fields else cfg.realizations
+    n_workers = min(10, cfg.workers) if debug_fields else cfg.workers
+    noptmax = 3
+    builder.write_control_settings(noptmax=noptmax, reals=reals, ies_num_threads=ies_num_threads)
+    pst_name = f"{project}.pst"
+    run_pst(
+        p_dir,
+        exe_,
+        pst_name,
+        num_workers=n_workers,
+        worker_root=w_dir,
+        master_dir=m_dir,
+        verbose=False,
+        cleanup=False,
+    )
+
+    for fname in [
+        f"{project}.3.par.csv",
+        f"{project}.2.par.csv",
+        f"{project}.phi.meas.csv",
+        f"{project}.pdc.csv",
+        f"{project}.idx.csv",
+    ]:
+        src = os.path.join(m_dir, fname)
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(results_dir, fname))
+
+    shutil.rmtree(p_dir)
+    shutil.rmtree(m_dir)
+    shutil.rmtree(w_dir)
+
+
+if __name__ == "__main__":
+    import time
+
+    cfg = _load_config()
+
+    DEBUG_FIELDS = None
+
+    results = os.path.join(cfg.project_ws, "results")
+    t0 = time.time()
+    run_pest_sequence(
+        cfg,
+        results,
+        pdc_remove=True,
+        debug_fields=DEBUG_FIELDS,
+    )
+    elapsed = time.time() - t0
+    print(f"\nTotal elapsed: {elapsed:.1f} s ({elapsed / 60:.1f} min)")

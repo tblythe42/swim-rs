@@ -187,8 +187,6 @@ cython_debug/
 /examples/4_Flux_Network/data/*
 !/examples/4_Flux_Network/data/gis/
 /examples/4_Flux_Network/openet_flux/
-/examples/4_Flux_Network/setup_shapefile.py
-/examples/4_Flux_Network/evaluate.py
 
 /examples/5_Flux_Ensemble/data/*
 !/examples/5_Flux_Ensemble/data/gis/

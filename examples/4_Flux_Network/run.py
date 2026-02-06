@@ -4,7 +4,7 @@ Run SWIM model for individual flux sites using the process package API.
 This module uses the modern container-based workflow:
     1. Open SwimContainer
     2. Build SwimInput from container
-    3. Run simulation with run_daily_loop
+    3. Run simulation with run_daily_loop_fast
     4. Convert output to DataFrame
 
 Usage:
@@ -19,7 +19,7 @@ import pandas as pd
 
 from swimrs.container import SwimContainer
 from swimrs.process.input import build_swim_input
-from swimrs.process.loop import run_daily_loop
+from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
 
@@ -136,7 +136,7 @@ def run_flux_site(
     )
 
     # Run simulation
-    output, final_state = run_daily_loop(swim_input)
+    output, final_state = run_daily_loop_fast(swim_input)
 
     print(f"\nExecution time: {time.time() - start_time:.2f} seconds\n")
 
@@ -178,17 +178,17 @@ if __name__ == "__main__":
     conf = project_dir / "4_Flux_Network.toml"
 
     cfg = ProjectConfig()
-    cfg.read_config(str(conf))
-
-    # Store original project_ws for container path
-    original_project_ws = cfg.project_ws
+    if os.path.isdir("/data/ssd1/swim"):
+        cfg.read_config(str(conf))
+    else:
+        cfg.read_config(str(conf), project_root_override=str(project_dir.parent))
 
     # Override output directory in run_flux_site if specified
     if args.output_dir:
         cfg.project_ws = args.output_dir
 
-    # Open container (always from original project workspace)
-    container_path = os.path.join(original_project_ws, f"{cfg.project_name}.swim")
+    # Open container from data dir
+    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
     if not os.path.exists(container_path):
         raise FileNotFoundError(
             f"Container not found at {container_path}. "

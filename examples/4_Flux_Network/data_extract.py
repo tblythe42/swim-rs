@@ -1,3 +1,13 @@
+"""Data extraction for 4_Flux_Network.
+
+Extraction functions for NDVI, SSEBop NHM ETf, SNODAS, properties, and GridMET.
+The SSEBop NHM ETf uses the USGS asset ``projects/usgs-gee-nhm-ssebop/assets/ssebop/landsat/c02``
+via the sparse_sample_etf extractor with ``usgs_nhm=True``.
+
+Usage:
+    python data_extract.py [--extract {all,nhm,ndvi,snodas,properties,gridmet}]
+"""
+
 import os
 from pathlib import Path
 
@@ -10,10 +20,9 @@ def _load_config() -> ProjectConfig:
     conf = project_dir / "4_Flux_Network.toml"
 
     cfg = ProjectConfig()
-    if os.path.isdir("/data/ssd2/swim"):
+    if os.path.isdir("/data/ssd1/swim"):
         cfg.read_config(str(conf))
     else:
-        # Run in-repo (writes under examples/<project>/...)
         cfg.read_config(str(conf), project_root_override=str(project_dir.parent))
     return cfg
 
@@ -82,12 +91,10 @@ def extract_properties(cfg: ProjectConfig) -> None:
     )
 
 
-def extract_remote_sensing(cfg: ProjectConfig, sites=None, get_sentinel: bool = True) -> None:
+def extract_ndvi(cfg: ProjectConfig, sites=None, get_sentinel: bool = True) -> None:
+    """Extract NDVI zonal stats for Landsat (and optionally Sentinel)."""
     is_authorized()
-    from swimrs.data_extraction.ee.etf_export import sparse_sample_etf
     from swimrs.data_extraction.ee.ndvi_export import sparse_sample_ndvi
-
-    models = [cfg.etf_target_model] + (cfg.etf_ensemble_members or [])
 
     for mask in ["irr", "inv_irr"]:
         dst = os.path.join(cfg.landsat_dir, "extracts", "ndvi", mask)
@@ -125,26 +132,35 @@ def extract_remote_sensing(cfg: ProjectConfig, sites=None, get_sentinel: bool = 
                 file_prefix=cfg.project_name,
             )
 
-        for model in models:
-            # PT-JPL and SIMS extractions are handled separately (OpenET software workflows).
-            if model in ["ptjpl", "sims"]:
-                continue
-            dst = os.path.join(cfg.landsat_dir, "extracts", f"{model}_etf", mask)
-            sparse_sample_etf(
-                cfg.fields_shapefile,
-                bucket=cfg.ee_bucket,
-                dest="bucket",
-                debug=False,
-                mask_type=mask,
-                check_dir=dst,
-                start_yr=max(2016, cfg.start_dt.year),
-                end_yr=cfg.end_dt.year,
-                feature_id=cfg.feature_id_col,
-                state_col=cfg.state_col,
-                select=sites,
-                model=model,
-                file_prefix=cfg.project_name,
-            )
+
+def extract_nhm_ssebop(cfg: ProjectConfig, sites=None) -> None:
+    """Extract SSEBop NHM ETf from the USGS EE asset.
+
+    Uses ``projects/usgs-gee-nhm-ssebop/assets/ssebop/landsat/c02`` with
+    ``et_fraction`` band divided by 10000.  West/east irrigation masking is
+    handled by the sparse extractor (IrrMapper for west, LANID for east).
+    """
+    is_authorized()
+    from swimrs.data_extraction.ee.etf_export import sparse_sample_etf
+
+    for mask in ["irr", "inv_irr"]:
+        dst = os.path.join(cfg.landsat_dir, "extracts", "ssebop_etf", mask)
+        sparse_sample_etf(
+            cfg.fields_shapefile,
+            bucket=cfg.ee_bucket,
+            dest="bucket",
+            debug=False,
+            mask_type=mask,
+            check_dir=dst,
+            start_yr=cfg.start_dt.year,
+            end_yr=cfg.end_dt.year,
+            feature_id=cfg.feature_id_col,
+            state_col=cfg.state_col,
+            select=sites,
+            model="ssebop",
+            usgs_nhm=True,
+            file_prefix=cfg.project_name,
+        )
 
 
 def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
@@ -191,9 +207,27 @@ def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Data extraction for 4_Flux_Network")
+    parser.add_argument(
+        "--extract",
+        choices=["all", "nhm", "ndvi", "snodas", "properties", "gridmet"],
+        default="all",
+        help="Which extraction to run (default: all)",
+    )
+    args = parser.parse_args()
+
     config = _load_config()
     select_sites = None
-    extract_snodas(config)
-    extract_properties(config)
-    extract_remote_sensing(config, select_sites, get_sentinel=True)
-    extract_gridmet(config, select_sites)
+
+    if args.extract in ("all", "snodas"):
+        extract_snodas(config)
+    if args.extract in ("all", "properties"):
+        extract_properties(config)
+    if args.extract in ("all", "ndvi"):
+        extract_ndvi(config, select_sites, get_sentinel=True)
+    if args.extract in ("all", "nhm"):
+        extract_nhm_ssebop(config, select_sites)
+    if args.extract in ("all", "gridmet"):
+        extract_gridmet(config, select_sites)
