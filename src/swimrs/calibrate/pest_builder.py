@@ -1337,7 +1337,8 @@ if __name__ == "__main__":
 
         d = self.pest.obs_dfs[i].copy()
         start_weight = d["weight"].sum()
-        idx = [i for i in pdc.index if "etf" in i and fid.lower() in i]
+        prefix = f"oname:obs_etf_{fid.lower()}_otype:"
+        idx = [i for i in pdc.index if i.startswith(prefix)]
         d.loc[idx, "weight"] = 0.0
         end_weight = d["weight"].sum()
         removed = start_weight - end_weight
