@@ -168,9 +168,7 @@ melt = (1 - albedo) × srad × swe_alpha + max(T_avg - 1.8, 0) × swe_beta
 
 ### Step 3: Runoff Calculation
 
-Two methods are available, selected via `runoff_process`:
-
-**Curve Number (CN) Method** (`runoff_process = "cn"`):
+SWIM-RS uses the Curve Number (CN) method:
 
 We adjust CN for antecedent moisture based on surface layer depletion:
 
@@ -187,14 +185,6 @@ Q = (P - Ia)² / (P - Ia + S)  when P > Ia
 
 For irrigated fields, we smooth runoff using a 4-day average of S values
 to reduce irrigation-induced variability.
-
-**Infiltration-Excess Method** (`runoff_process = "ier"`):
-
-Uses hourly precipitation vs. infiltration capacity:
-
-```
-Q = Σ max(P_hr - Ksat_hr, 0)
-```
 
 **Infiltrating precipitation** = rain + snowmelt - runoff
 

@@ -325,53 +325,6 @@ classDiagram
 
 ---
 
-## Workflow Engine
-
-Shows the YAML-driven workflow orchestration system.
-
-```mermaid
-flowchart LR
-    subgraph Config["WorkflowConfig (YAML)"]
-        Project["project:<br/>name, shapefile, dates"]
-        Sources["sources:<br/>ndvi, etf, met, props"]
-        Compute["workflow:<br/>fused_ndvi, dynamics"]
-        Export["export:<br/>format, output"]
-    end
-
-    subgraph Engine["WorkflowEngine"]
-        Parse["Parse YAML"]
-        Plan["Build step graph"]
-        Execute["Execute steps"]
-        Resume["Resume from checkpoint"]
-    end
-
-    subgraph Steps["WorkflowSteps"]
-        S1["IngestNDVIStep"]
-        S2["IngestETFStep"]
-        S3["IngestMeteorologyStep"]
-        S4["IngestPropertiesStep"]
-        S5["ComputeFusedNDVIStep"]
-        S6["ComputeDynamicsStep"]
-        S7["ExportStep"]
-    end
-
-    subgraph Progress["WorkflowProgress"]
-        Status["step status"]
-        Errors["error messages"]
-        Timing["execution times"]
-    end
-
-    Config --> Parse
-    Parse --> Plan
-    Plan --> Execute
-    Execute --> Steps
-    Steps --> Progress
-    Progress --> Resume
-    Resume --> Execute
-```
-
----
-
 ## Zarr Data Schema
 
 Shows the hierarchical data organization within the container.

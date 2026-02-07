@@ -66,7 +66,6 @@ bucket = "wudr"  # only needed for EE bucket exports; drive exports don’t requ
 irrigation_threshold = 0.3
 elev_units = "m"
 refet_type = "eto"   # eto | etr
-runoff_process = "cn"      # cn (SCS Curve Number) | ier (Infiltration excess runoff exceeding Ksat rate)
 
 [date_range]
 start_date = "1987-01-01"

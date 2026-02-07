@@ -131,7 +131,7 @@ classDiagram
         +datetime start_date, end_date
         +int n_days, n_fields
         +list fids
-        +str runoff_process, refet_type
+        +str refet_type
         +FieldProperties properties
         +CalibrationParameters parameters
         +WaterBalanceState spinup_state

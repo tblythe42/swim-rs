@@ -178,7 +178,6 @@ The full annotated template is shown below. You can also [download template.toml
     irrigation_threshold = 0.3  # Fraction of field area irrigated
     elev_units = "m"            # Elevation units in shapefile
     refet_type = "eto"          # Reference ET: "eto" (grass) or "etr" (alfalfa)
-    runoff_process = "cn"       # "cn" (Curve Number) or "ier" (infiltration-excess)
 
     # --------------------------------------------------------------------------
     # Date Range
@@ -513,7 +512,6 @@ Each project uses a TOML with a small, consistent set of keys. These are the req
 - `irrigation_threshold` (float): Fraction of field area irrigated to trigger irrigation mode (0.0–1.0)
 - `elev_units` (string): Elevation units in shapefile (`"m"` or `"ft"`)
 - `refet_type` (string): Reference ET type — `"eto"` (grass) or `"etr"` (alfalfa)
-- `runoff_process` (string): `"cn"` (Curve Number) or `"ier"` (infiltration-excess)
 
 ### `[date_range]` (required)
 - `start_date`, `end_date` (string): YYYY-MM-DD format

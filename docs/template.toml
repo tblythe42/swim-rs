@@ -80,7 +80,6 @@ mask_mode = "irrigation"    # "irrigation" or "none"
 irrigation_threshold = 0.3  # Fraction of field area irrigated to trigger irrigation mode
 elev_units = "m"            # Elevation units in shapefile
 refet_type = "eto"          # Reference ET: "eto" (grass) or "etr" (alfalfa)
-runoff_process = "cn"       # "cn" (Curve Number) or "ier" (infiltration-excess)
 
 # ------------------------------------------------------------------------------
 # Date Range
