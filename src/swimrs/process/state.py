@@ -609,8 +609,12 @@ class CalibrationParameters:
                         value = float(df.iloc[0]["1"])
                         arr = getattr(params, attr_name)
                         arr[i] = value
-                    except Exception:
-                        pass  # Use default if file can't be read
+                    except Exception as exc:
+                        raise ValueError(
+                            f"Failed to parse multiplier file {csv_file} for "
+                            f"parameter '{pest_name}' and field '{fid}'. "
+                            "Expected a CSV with a numeric value in column '1'."
+                        ) from exc
 
         return params
 
@@ -681,7 +685,11 @@ def load_pest_mult_properties(
                     value = float(df.iloc[0]["1"])
                     arr = getattr(props, attr_name)
                     arr[i] = value
-                except Exception:
-                    pass  # Use default if file can't be read
+                except Exception as exc:
+                    raise ValueError(
+                        f"Failed to parse multiplier file {csv_file} for "
+                        f"property '{pest_name}' and field '{fid}'. "
+                        "Expected a CSV with a numeric value in column '1'."
+                    ) from exc
 
     return props

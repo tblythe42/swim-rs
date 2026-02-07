@@ -1,8 +1,7 @@
 """Runoff calculations for daily water balance.
 
-Pure physics kernels for computing surface runoff using either:
-- SCS Curve Number method with dynamic antecedent moisture adjustment
-- Infiltration-excess method using hourly precipitation
+Pure physics kernels for computing surface runoff using the
+SCS Curve Number method with dynamic antecedent moisture adjustment.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ __all__ = [
     "curve_number_adjust",
     "scs_runoff",
     "scs_runoff_smoothed",
-    "infiltration_excess",
 ]
 
 
@@ -254,61 +252,5 @@ def scs_runoff_smoothed(
         # Ensure runoff doesn't exceed precipitation
         if sro[i] > precip[i]:
             sro[i] = precip[i]
-
-    return sro
-
-
-@njit(cache=True, fastmath=True, parallel=True)
-def infiltration_excess(
-    hr_precip: NDArray[np.float64],
-    ksat_hourly: NDArray[np.float64],
-) -> NDArray[np.float64]:
-    """
-    Calculate surface runoff using infiltration-excess (Hortonian) method.
-
-    Runoff occurs when precipitation intensity exceeds infiltration capacity.
-
-    Q = sum over hours of max(P_h - Ksat, 0)
-
-    Physical constraints:
-        - 0 <= Q <= total precipitation
-        - Q > 0 only when hourly precip exceeds hourly Ksat
-
-    Parameters
-    ----------
-    hr_precip : (24, n_fields)
-        Hourly precipitation (mm/hr) for each hour of the day
-    ksat_hourly : (n_fields,)
-        Saturated hydraulic conductivity (mm/hr)
-        Represents maximum infiltration rate
-
-    Returns
-    -------
-    sro : (n_fields,)
-        Daily surface runoff (mm), sum of hourly excess
-
-    Notes
-    -----
-    This method is more physically realistic than Curve Number for
-    high-intensity rainfall events, as it accounts for precipitation
-    intensity rather than just daily total.
-
-    Ksat should represent the soil's infiltration capacity, which may
-    be less than saturated hydraulic conductivity due to surface crusting,
-    compaction, or other factors.
-
-    References
-    ----------
-    Horton (1933) infiltration-excess runoff concept
-    """
-    n_hours = hr_precip.shape[0]
-    n_fields = hr_precip.shape[1]
-    sro = np.zeros(n_fields, dtype=np.float64)
-
-    for j in prange(n_fields):
-        for h in range(n_hours):
-            excess = hr_precip[h, j] - ksat_hourly[j]
-            if excess > 0.0:
-                sro[j] += excess
 
     return sro

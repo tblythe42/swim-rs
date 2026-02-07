@@ -390,17 +390,13 @@ elev_units = "ft"
         return toml_file
 
     def test_read_config_loads_misc_settings(self, config_with_misc):
-        """read_config loads misc settings."""
+        """Unsupported runoff_process values fail loudly."""
         config = ProjectConfig()
-        config.read_config(str(config_with_misc))
+        with pytest.raises(ValueError, match="Only 'cn' is supported"):
+            config.read_config(str(config_with_misc))
 
-        assert config.runoff_process == "ier"
-        assert config.refet_type == "etr"
-        assert config.irrigation_threshold == 0.5
-        assert config.elev_units == "ft"
-
-    def test_read_config_defaults_runoff_process_to_cn(self, tmp_path):
-        """read_config defaults runoff_process to 'cn'."""
+    def test_read_config_without_runoff_process_is_valid(self, tmp_path):
+        """Configs without runoff_process remain valid."""
         gis_dir = tmp_path / "gis"
         gis_dir.mkdir()
         shapefile = gis_dir / "fields.shp"
@@ -426,7 +422,7 @@ end_date = "2020-12-31"
         config = ProjectConfig()
         config.read_config(str(toml_file))
 
-        assert config.runoff_process == "cn"
+        assert config.refet_type is None
 
 
 class TestResolvePathsEdgeCases:

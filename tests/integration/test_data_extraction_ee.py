@@ -117,10 +117,12 @@ class TestLoadShapefile:
     def test_applies_buffer(self, simple_shapefile):
         """load_shapefile applies buffer when specified."""
         no_buffer = load_shapefile(str(simple_shapefile), "FID")
-        with_buffer = load_shapefile(str(simple_shapefile), "FID", buffer=0.01)
+        with_buffer = load_shapefile(str(simple_shapefile), "FID", buffer=1000.0)
 
         # Buffered geometry should be larger
-        assert with_buffer.geometry.area.sum() > no_buffer.geometry.area.sum()
+        no_buffer_area = no_buffer.to_crs(5071).geometry.area.sum()
+        with_buffer_area = with_buffer.to_crs(5071).geometry.area.sum()
+        assert with_buffer_area > no_buffer_area
 
     def test_preserves_columns(self, simple_shapefile):
         """load_shapefile preserves original columns."""

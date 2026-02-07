@@ -47,7 +47,6 @@ class MetSource(str, Enum):
 
     GRIDMET = "gridmet"
     ERA5 = "era5"
-    NLDAS = "nldas"
 
 
 class SnowSource(str, Enum):
@@ -252,8 +251,7 @@ ROOTING_DEPTH_BY_LULC: dict[int, RootingDepthSpec] = {
 }
 
 # Required meteorology parameters for model input
-REQUIRED_MET_BASE: list[str] = ["tmin", "tmax", "srad", "swe", "prcp", "nld_ppt_d"]
-REQUIRED_MET_HOURLY: list[str] = [f"prcp_hr_{i:02d}" for i in range(24)]
+REQUIRED_MET_BASE: list[str] = ["tmin", "tmax", "srad", "swe", "prcp"]
 REQUIRED_MET_IRR: list[str] = ["eto_corr"]  # Required for irrigated fields
 REQUIRED_MET_UNIRR: list[str] = ["eto"]  # Required for non-irrigated fields
 
@@ -420,7 +418,7 @@ class SwimSchema:
     }
 
     METEOROLOGY_STRUCTURE = {
-        "sources": [MetSource.GRIDMET, MetSource.ERA5, MetSource.NLDAS],
+        "sources": [MetSource.GRIDMET, MetSource.ERA5],
         "variables": [
             Parameter.ETO,
             Parameter.ETR,
@@ -591,7 +589,7 @@ class SwimSchema:
         Args:
             model: ET model to calibrate against (default: ssebop)
             mask: Mask type to use (irr, inv_irr, or no_mask)
-            met_source: Meteorology source (gridmet, era5, nldas)
+            met_source: Meteorology source (gridmet, era5)
             snow_source: Snow data source (snodas, era5)
             instrument: Remote sensing instrument (landsat, ecostress)
         """
@@ -628,7 +626,7 @@ class SwimSchema:
         Args:
             model: ET model to use (default: ssebop)
             mask: Mask type - can be 'irr', 'inv_irr', or 'no_mask'
-            met_source: Meteorology source (gridmet, era5, nldas)
+            met_source: Meteorology source (gridmet, era5)
             instrument: Remote sensing instrument (landsat, ecostress)
         """
         required = [

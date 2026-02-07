@@ -2,7 +2,7 @@
 Ingestor component for data ingestion operations.
 
 Provides a clean, namespace-organized API for ingesting data into the container.
-Usage: container.ingest.ndvi(...) instead of container.ingest_ee_ndvi(...)
+Usage: container.ingest.ndvi(...)
 """
 
 from __future__ import annotations

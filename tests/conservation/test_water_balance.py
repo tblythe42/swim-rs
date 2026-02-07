@@ -1233,20 +1233,16 @@ class TestEdgeCases:
         assert day_out["eta"].shape == (n,)
 
 
-class TestIERRunoff:
-    """Tests for infiltration-excess runoff mode."""
+class TestRunoffConservation:
+    """Tests for runoff behavior in the daily loop."""
 
-    def test_ier_mode_conserves(self):
-        """IER runoff mode conserves water."""
+    def test_cn_mode_conserves_with_heavy_precip(self):
+        """Curve Number runoff conserves water under intense precipitation."""
         state, props, params = create_test_setup(
             n_fields=1,
             depl_root=30.0,
             perennial=True,
         )
-
-        # Create hourly precip (heavy rainfall intensity)
-        prcp_hr = np.zeros((24, 1), dtype=np.float64)
-        prcp_hr[10:14, 0] = 10.0  # 40mm in 4 hours = 10mm/hr
 
         inputs = create_daily_inputs(n_fields=1, prcp=40.0, etr=3.0)
 
@@ -1262,8 +1258,6 @@ class TestIERRunoff:
             inputs["tmax"],
             inputs["srad"],
             inputs["irr_flag"],
-            runoff_process="ier",
-            prcp_hr=prcp_hr,
         )
 
         error = compute_water_balance_error(state_before, state, props, day_out, inputs["prcp"])

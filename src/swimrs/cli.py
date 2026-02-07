@@ -161,6 +161,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if export_dest == "bucket" and not bucket_arg:
         print("Export destination set to bucket, but no --bucket or config.ee_bucket provided")
         return 2
+    failures: list[str] = []
 
     # 1) SNODAS SWE (builds EE FeatureCollection from fields shapefile by default)
     if not args.no_snodas:
@@ -178,6 +179,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             )
         except Exception as e:
             print(f"SNODAS export error: {e}")
+            failures.append("snodas")
 
     # 2) Properties (CDL, irrigation fraction, SSURGO, landcover)
     if not args.no_properties:
@@ -230,6 +232,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             )
         except Exception as e:
             print(f"Properties export error: {e}")
+            failures.append("properties")
 
     # 3) Remote sensing NDVI (and optionally Sentinel & ETF models)
     if not args.no_rs:
@@ -303,6 +306,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
                         )
         except Exception as e:
             print(f"Remote sensing export error: {e}")
+            failures.append("remote_sensing")
 
     # 4) Meteorology: GridMET or ERA5-Land based on config.met_source
     met_source = getattr(config, "met_source", "gridmet")
@@ -310,7 +314,6 @@ def cmd_extract(args: argparse.Namespace) -> int:
         print("Skipping meteorology download (--no-met).")
     elif met_source == "gridmet":
         try:
-            use_nldas = getattr(config, "runoff_process", None) == "ier"
             # Assign GFIDs (optionally from centroids), optionally sample corrections
             gridmet_points = (
                 config.gridmet_centroids if getattr(args, "use_gridmet_centroids", False) else None
@@ -344,10 +347,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
                 append=True,
                 target_fields=_parse_sites_arg(args.sites),
                 feature_id=config.gridmet_mapping_index_col,
-                use_nldas=use_nldas,
             )
         except Exception as e:
             print(f"GridMET error: {e}")
+            failures.append("meteorology_gridmet")
     elif met_source == "era5":
         if export_dest != "bucket":
             print("ERA5-Land export requires --export=bucket and a configured bucket.")
@@ -366,8 +369,14 @@ def cmd_extract(args: argparse.Namespace) -> int:
             )
         except Exception as e:
             print(f"ERA5-Land export error: {e}")
+            failures.append("meteorology_era5")
     else:
-        print(f"Unknown met_source '{met_source}' in config; skipping meteorology export.")
+        print(f"Unknown met_source '{met_source}' in config")
+        failures.append("meteorology_source")
+
+    if failures:
+        print(f"Extract failed for stage(s): {', '.join(failures)}")
+        return 1
 
     return 0
 
@@ -488,6 +497,7 @@ def cmd_prep(args: argparse.Namespace) -> int:
     use_lulc = bool(args.use_lulc_irr or args.international)
     masks = ("no_mask",) if use_lulc else ("irr", "inv_irr")
     instruments = ["landsat"]
+    failures: list[str] = []
 
     try:
         # Properties
@@ -501,36 +511,45 @@ def cmd_prep(args: argparse.Namespace) -> int:
             )
             print("Ingested properties")
         except Exception as e:
-            print(f"Properties ingest skipped/failed: {e}")
+            print(f"Properties ingest failed: {e}")
+            failures.append("properties")
 
         # NDVI
         if not args.no_ndvi:
             for mask in masks:
                 ndvi_dir = os.path.join(config.landsat_dir or "", "extracts", "ndvi", mask)
                 if os.path.isdir(ndvi_dir):
-                    container.ingest.ndvi(
-                        ndvi_dir,
-                        uid_column=config.feature_id_col,
-                        instrument="landsat",
-                        mask=mask,
-                        fields=sites,
-                        overwrite=args.overwrite,
-                    )
-                    print(f"Ingested Landsat NDVI ({mask})")
-                if args.add_sentinel and not args.landsat_only_ndvi:
-                    s2_dir = os.path.join(config.sentinel_dir or "", "extracts", "ndvi", mask)
-                    if os.path.isdir(s2_dir):
+                    try:
                         container.ingest.ndvi(
-                            s2_dir,
+                            ndvi_dir,
                             uid_column=config.feature_id_col,
-                            instrument="sentinel",
+                            instrument="landsat",
                             mask=mask,
                             fields=sites,
                             overwrite=args.overwrite,
                         )
-                        if "sentinel" not in instruments:
-                            instruments.append("sentinel")
-                        print(f"Ingested Sentinel NDVI ({mask})")
+                        print(f"Ingested Landsat NDVI ({mask})")
+                    except Exception as e:
+                        print(f"Landsat NDVI ingest failed ({mask}): {e}")
+                        failures.append(f"ndvi_landsat_{mask}")
+                if args.add_sentinel and not args.landsat_only_ndvi:
+                    s2_dir = os.path.join(config.sentinel_dir or "", "extracts", "ndvi", mask)
+                    if os.path.isdir(s2_dir):
+                        try:
+                            container.ingest.ndvi(
+                                s2_dir,
+                                uid_column=config.feature_id_col,
+                                instrument="sentinel",
+                                mask=mask,
+                                fields=sites,
+                                overwrite=args.overwrite,
+                            )
+                            if "sentinel" not in instruments:
+                                instruments.append("sentinel")
+                            print(f"Ingested Sentinel NDVI ({mask})")
+                        except Exception as e:
+                            print(f"Sentinel NDVI ingest failed ({mask}): {e}")
+                            failures.append(f"ndvi_sentinel_{mask}")
 
         # ETF
         if not args.no_etf:
@@ -543,16 +562,20 @@ def cmd_prep(args: argparse.Namespace) -> int:
                         config.landsat_dir or "", "extracts", f"{model}_etf", mask
                     )
                     if os.path.isdir(etf_dir):
-                        container.ingest.etf(
-                            etf_dir,
-                            uid_column=config.feature_id_col,
-                            model=model,
-                            mask=mask,
-                            instrument="landsat",
-                            fields=sites,
-                            overwrite=args.overwrite,
-                        )
-                        print(f"Ingested ETf {model} ({mask})")
+                        try:
+                            container.ingest.etf(
+                                etf_dir,
+                                uid_column=config.feature_id_col,
+                                model=model,
+                                mask=mask,
+                                instrument="landsat",
+                                fields=sites,
+                                overwrite=args.overwrite,
+                            )
+                            print(f"Ingested ETf {model} ({mask})")
+                        except Exception as e:
+                            print(f"ETf ingest failed ({model}, {mask}): {e}")
+                            failures.append(f"etf_{model}_{mask}")
 
         # Meteorology
         if not args.no_met:
@@ -571,6 +594,7 @@ def cmd_prep(args: argparse.Namespace) -> int:
                     print("Ingested GridMET")
                 except Exception as e:
                     print(f"GridMET ingest failed: {e}")
+                    failures.append("meteorology_gridmet")
             elif met_source == "era5":
                 try:
                     container.ingest.era5(
@@ -580,6 +604,10 @@ def cmd_prep(args: argparse.Namespace) -> int:
                     print("Ingested ERA5-Land")
                 except Exception as e:
                     print(f"ERA5 ingest failed: {e}")
+                    failures.append("meteorology_era5")
+            else:
+                print(f"Unsupported met_source '{met_source}'")
+                failures.append("meteorology_source")
 
         # SNODAS (optional)
         if not args.no_snow and getattr(config, "snow_source", "snodas") == "snodas":
@@ -592,7 +620,8 @@ def cmd_prep(args: argparse.Namespace) -> int:
                 )
                 print("Ingested SNODAS")
             except Exception as e:
-                print(f"SNODAS ingest skipped/failed: {e}")
+                print(f"SNODAS ingest failed: {e}")
+                failures.append("snow")
 
         # Derived products
         try:
@@ -603,7 +632,8 @@ def cmd_prep(args: argparse.Namespace) -> int:
             )
             print("Computed merged NDVI")
         except Exception as e:
-            print(f"Merged NDVI compute skipped/failed: {e}")
+            print(f"Merged NDVI compute failed: {e}")
+            failures.append("merged_ndvi")
 
         try:
             container.compute.dynamics(
@@ -619,13 +649,18 @@ def cmd_prep(args: argparse.Namespace) -> int:
             )
             print("Computed dynamics")
         except Exception as e:
-            print(f"Dynamics compute skipped/failed: {e}")
+            print(f"Dynamics compute failed: {e}")
+            failures.append("dynamics")
 
     finally:
         try:
             container.close()
         except Exception:
             pass
+
+    if failures:
+        print(f"Prep failed for stage(s): {', '.join(failures)}")
+        return 1
 
     return 0
 
@@ -711,7 +746,6 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
             output_h5=temp_h5_path,
             spinup_json_path=spinup_path,
             calibrated_params_path=calibrated_params_path,
-            runoff_process=getattr(config, "runoff_process", "cn"),
             refet_type=getattr(config, "refet_type", "eto") or "eto",
             etf_model=getattr(config, "etf_target_model", "ssebop"),
             met_source=getattr(config, "met_source", "gridmet"),
@@ -734,6 +768,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         tmax = swim_input.get_time_series("tmax")
 
         # Build per-field DataFrames and write CSVs
+        write_failures: list[str] = []
         for i, fid in enumerate(targets):
             # Build DataFrame with available columns
             df_data = {
@@ -764,6 +799,11 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
                 print(f"Wrote {out_csv}")
             except Exception as e:
                 print(f"Failed to write {out_csv}: {e}")
+                write_failures.append(fid)
+
+        if write_failures:
+            print(f"Evaluation output write failed for site(s): {', '.join(write_failures)}")
+            return 1
 
         swim_input.close()
 

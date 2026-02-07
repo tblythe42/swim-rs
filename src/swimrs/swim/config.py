@@ -23,7 +23,6 @@ class ProjectConfig:
         calibrate: Whether calibration mode is enabled.
         forecast: Whether forecast mode is enabled.
         met_source: Meteorology data source ('gridmet' or 'era5').
-        runoff_process: Runoff method ('cn' for Curve Number, 'ier' for infiltration-excess).
 
     Example:
         >>> config = ProjectConfig()
@@ -79,7 +78,6 @@ class ProjectConfig:
         self.irr_threshold = None
         self.elev_units = None
         self.refet_type = None
-        self.runoff_process = None  # "cn" | "ier"
         self.start_dt = None
         self.end_dt = None
         self.kc_proxy = None
@@ -297,8 +295,12 @@ class ProjectConfig:
         self.irr_threshold = self.irrigation_threshold
         self.elev_units = misc_conf.get("elev_units", "m")
         self.refet_type = misc_conf.get("refet_type")
-        # Runoff process selection: "cn" (Curve Number) or "ier" (infiltration-excess)
-        self.runoff_process = misc_conf.get("runoff_process", "cn")
+        # IER has been retired; only Curve Number runoff is supported.
+        runoff_process = (misc_conf.get("runoff_process", "cn") or "cn").strip().lower()
+        if runoff_process != "cn":
+            raise ValueError(
+                f"Unsupported misc.runoff_process={runoff_process!r}. Only 'cn' is supported."
+            )
 
         # Dates
         sdt_str = date_range_conf.get("start_date")

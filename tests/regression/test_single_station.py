@@ -1071,10 +1071,6 @@ class TestErrorHandling:
 
         container.close()
 
-    @pytest.mark.xfail(
-        reason="ZipStore in zarr v3 does not support overwriting existing arrays. "
-        "See ContainsArrayError when _safe_delete_path fails to remove arrays."
-    )
     def test_ingest_ndvi_succeeds_with_overwrite(
         self, s2_shapefile, s2_input_dir, s2_has_input_data, tmp_path
     ):

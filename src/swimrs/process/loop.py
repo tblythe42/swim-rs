@@ -29,7 +29,6 @@ from swimrs.process.kernels.root_growth import (
 )
 from swimrs.process.kernels.runoff import (
     curve_number_adjust,
-    infiltration_excess,
     scs_runoff,
     scs_runoff_smoothed,
 )
@@ -205,10 +204,6 @@ def run_daily_loop(
 
     n_days = swim_input.n_days
     n_fields = swim_input.n_fields
-    runoff_process = getattr(swim_input, "runoff_process", None) or "cn"
-
-    # Check if hourly precip is available for IER mode
-    has_hourly_prcp = swim_input.has_hourly_precip()
 
     # Initialize state from spinup
     state = swim_input.spinup_state.copy()
@@ -225,12 +220,6 @@ def run_daily_loop(
     all_tmax = swim_input.get_time_series("tmax")
     all_srad = swim_input.get_time_series("srad")
     all_irr_flag = swim_input.get_irr_flag()  # (n_days, n_fields)
-
-    # Pre-load hourly precip if needed
-    all_prcp_hr = None
-    if runoff_process == "ier" and has_hourly_prcp:
-        # Load full array: (n_days, n_fields, 24)
-        all_prcp_hr = swim_input._h5_file["time_series/prcp_hr"][:]
 
     # Track year-specific f_sub for groundwater subsidy
     has_year_gwsub = swim_input.has_year_specific_gwsub()
@@ -255,11 +244,6 @@ def run_daily_loop(
         srad = all_srad[day_idx, :]
         irr_flag = all_irr_flag[day_idx, :]
 
-        # Get hourly precip if IER mode and available
-        prcp_hr = None
-        if all_prcp_hr is not None:
-            prcp_hr = all_prcp_hr[day_idx, :, :].T  # Transpose to (24, n_fields)
-
         # Step the simulation
         day_out = step_day(
             state=state,
@@ -272,8 +256,6 @@ def run_daily_loop(
             tmax=tmax,
             srad=srad,
             irr_flag=irr_flag,
-            runoff_process=runoff_process,
-            prcp_hr=prcp_hr,
             f_sub=current_f_sub,
         )
 
@@ -311,8 +293,6 @@ def step_day(
     tmax: NDArray[np.float64],
     srad: NDArray[np.float64],
     irr_flag: NDArray[np.bool_],
-    runoff_process: str = "cn",
-    prcp_hr: NDArray[np.float64] | None = None,
     f_sub: NDArray[np.float64] | None = None,
 ) -> dict[str, NDArray[np.float64]]:
     """Execute a single daily time step.
@@ -342,10 +322,6 @@ def step_day(
         Solar radiation (W/m²), daily mean downward shortwave radiation
     irr_flag : (n_fields,)
         Irrigation flag for this day
-    runoff_process : str
-        Runoff mode: 'cn' for Curve Number or 'ier' for infiltration-excess
-    prcp_hr : (24, n_fields,), optional
-        Hourly precipitation (mm/hr), required for IER mode
     f_sub : (n_fields,), optional
         Year-specific groundwater subsidy fraction. If provided, overrides
         props.f_sub for this time step.
@@ -386,34 +362,26 @@ def step_day(
     # Effective precipitation (rain + melt)
     precip_eff = rain + melt
 
-    # 2. Runoff calculation based on runoff_process
-    if runoff_process == "ier" and prcp_hr is not None:
-        # Infiltration-excess method (Hortonian runoff)
-        # prcp_hr expected shape: (24, n_fields)
-        # props.ksat is stored as mm/day; convert to an hourly rate (mm/hr)
-        ksat_hourly = props.ksat / 24.0
-        runoff = infiltration_excess(prcp_hr, ksat_hourly)
+    # 2. Runoff: SCS Curve Number with antecedent moisture adjustment
+    cn_adj = curve_number_adjust(props.cn2, state.depl_ze, props.rew, props.tew)
+
+    if np.any(props.irr_status):
+        # Irrigated fields: use smoothed runoff over 4-day S history
+        runoff_std, s_new = scs_runoff(precip_eff, cn_adj)
+        runoff_smooth = scs_runoff_smoothed(precip_eff, state.s1, state.s2, state.s3, state.s4)
+        runoff = np.where(props.irr_status, runoff_smooth, runoff_std)
+
+        # Shift S history (newest to oldest: s_new -> s1 -> s2 -> s3 -> s4)
+        # Legacy model sets s1 to today's S (runoff.py: foo.s1 = foo.s).
+        state.s4 = state.s3.copy()
+        state.s3 = state.s2.copy()
+        state.s2 = state.s1.copy()
+        state.s1 = s_new.copy()
+        state.s = s_new
     else:
-        # SCS Curve Number with antecedent moisture adjustment
-        cn_adj = curve_number_adjust(props.cn2, state.depl_ze, props.rew, props.tew)
-
-        if np.any(props.irr_status):
-            # Irrigated fields: use smoothed runoff over 4-day S history
-            runoff_std, s_new = scs_runoff(precip_eff, cn_adj)
-            runoff_smooth = scs_runoff_smoothed(precip_eff, state.s1, state.s2, state.s3, state.s4)
-            runoff = np.where(props.irr_status, runoff_smooth, runoff_std)
-
-            # Shift S history (newest to oldest: s_new -> s1 -> s2 -> s3 -> s4)
-            # Legacy model sets s1 to today's S (runoff.py: foo.s1 = foo.s).
-            state.s4 = state.s3.copy()
-            state.s3 = state.s2.copy()
-            state.s2 = state.s1.copy()
-            state.s1 = s_new.copy()
-            state.s = s_new
-        else:
-            # Non-irrigated: standard SCS runoff
-            runoff, s_new = scs_runoff(precip_eff, cn_adj)
-            state.s = s_new
+        # Non-irrigated: standard SCS runoff
+        runoff, s_new = scs_runoff(precip_eff, cn_adj)
+        state.s = s_new
 
     # Net infiltration
     infiltration = precip_eff - runoff
@@ -493,8 +461,9 @@ def step_day(
             state.depl_ze > props.tew, np.maximum(depl_ze_prev, 0.0) + evap, state.depl_ze
         )
 
-    # Calculate ETf
-    etf = np.where(etr > 0, eta / etr, 0.0)
+    # Calculate ETf with safe division (avoid invalid divide warnings)
+    etf = np.zeros_like(eta)
+    np.divide(eta, etr, out=etf, where=etr > 0)
 
     # 13. First update depletion with ET and infiltration ONLY
     # This matches legacy model compute_field_et.py line 114:

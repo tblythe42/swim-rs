@@ -50,9 +50,6 @@ openet = [
   "openet-disalexi",
   "openet-geesebal",
 ]
-nldas = [
-  "pynldas2",
-]
 dev = [
   "pytest",
   "pytest-cov",

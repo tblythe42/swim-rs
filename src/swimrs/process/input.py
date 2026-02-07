@@ -56,8 +56,6 @@ class SwimInput:
         Number of fields/pixels
     fids : list[str]
         Field identifiers
-    runoff_process : str
-        Runoff mode ('cn' Curve Number or 'ier' infiltration-excess)
     refet_type : str
         Reference ET type ('eto' or 'etr')
     properties : FieldProperties
@@ -90,7 +88,6 @@ class SwimInput:
     n_days: int = field(default=0)
     n_fields: int = field(default=0)
     fids: list = field(default_factory=list)
-    runoff_process: str = field(default="cn")
     refet_type: str = field(default="eto")
     properties: FieldProperties = field(default=None)
     parameters: CalibrationParameters = field(default=None)
@@ -112,7 +109,6 @@ class SwimInput:
         config = json.loads(h5.attrs["config"])
         self.start_date = datetime.fromisoformat(config["start_date"])
         self.end_date = datetime.fromisoformat(config["end_date"])
-        self.runoff_process = config.get("runoff_process", "cn")
         self.refet_type = config.get("refet_type", "eto")
 
         # Load field info
@@ -317,43 +313,6 @@ class SwimInput:
             return irr[day_idx, :].astype(bool)
         return irr[:].astype(bool)
 
-    def has_hourly_precip(self) -> bool:
-        """Check if hourly precipitation data is available.
-
-        Returns
-        -------
-        bool
-            True if prcp_hr dataset exists in time_series group
-        """
-        if self._h5_file is None:
-            return False
-        return "prcp_hr" in self._h5_file["time_series"]
-
-    def get_hourly_precip(self, day_idx: int) -> NDArray[np.float64] | None:
-        """Get hourly precipitation for a specific day.
-
-        Parameters
-        ----------
-        day_idx : int
-            Day index
-
-        Returns
-        -------
-        NDArray[np.float64] | None
-            Hourly precip array of shape (24, n_fields), transposed from
-            storage format (n_fields, 24). Returns None if not available.
-        """
-        if self._h5_file is None:
-            raise RuntimeError("HDF5 file not open")
-
-        if "prcp_hr" not in self._h5_file["time_series"]:
-            return None
-
-        # Storage format is (n_days, n_fields, 24)
-        # Return (24, n_fields) for infiltration_excess kernel
-        prcp_hr = self._h5_file["time_series/prcp_hr"][day_idx, :, :]
-        return prcp_hr.T  # Transpose to (24, n_fields)
-
     def get_date(self, day_idx: int) -> datetime:
         """Get date for a given day index."""
         from datetime import timedelta
@@ -480,7 +439,6 @@ def build_swim_input(
     calibrated_params_path: Path | str | None = None,
     start_date: str | datetime | None = None,
     end_date: str | datetime | None = None,
-    runoff_process: str = "cn",
     refet_type: str = "eto",
     etf_model: str = "ssebop",
     met_source: str = "gridmet",
@@ -508,8 +466,6 @@ def build_swim_input(
         Override start date (default: from container)
     end_date : str | datetime, optional
         Override end date (default: from container)
-    runoff_process : str
-        Runoff mode: 'cn' (curve number) or 'ier' (infiltration excess)
     refet_type : str
         Reference ET type to use from the container: 'eto' (grass) or 'etr' (alfalfa).
         This is typically configured in the project TOML and passed through the CLI.
@@ -588,7 +544,6 @@ def build_swim_input(
         config = {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "runoff_process": runoff_process,
             "refet_type": refet_type,
         }
         h5.attrs["config"] = json.dumps(config)

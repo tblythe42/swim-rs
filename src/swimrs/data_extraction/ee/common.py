@@ -91,7 +91,9 @@ def load_shapefile(
     feature_id : str
         Field name for feature identifier.
     buffer : float, optional
-        Buffer distance in CRS units. Applied before CRS transformation.
+        Buffer distance. If source CRS is projected, interpreted in CRS units.
+        If source CRS is geographic, interpreted in meters in a temporary
+        projected CRS.
 
     Returns
     -------
@@ -102,7 +104,17 @@ def load_shapefile(
     df = df.set_index(feature_id, drop=False)
 
     if buffer:
-        df.geometry = df.geometry.buffer(buffer)
+        if df.crs is None:
+            raise ValueError("Shapefile CRS is missing; cannot apply buffer safely.")
+        if df.crs.is_geographic:
+            target_crs = df.estimate_utm_crs()
+            if target_crs is None:
+                target_crs = "EPSG:6933"
+            projected = df.to_crs(target_crs)
+            projected.geometry = projected.geometry.buffer(buffer)
+            df = projected.to_crs(4326)
+        else:
+            df.geometry = df.geometry.buffer(buffer)
 
     original_crs = df.crs
     if original_crs and original_crs.srs != "EPSG:4326":

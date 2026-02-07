@@ -94,8 +94,6 @@ from swimrs.container.storage import (
     open_storage,
 )
 
-# Workflow imports are lazy - import from swimrs.container.workflow directly if needed
-
 __all__ = [
     # Main classes
     "SwimContainer",
@@ -127,7 +125,6 @@ __all__ = [
     "ContainerLogger",
     "get_logger",
     "configure_logging",
-    # Workflow: import from swimrs.container.workflow if needed
     # Enums
     "Instrument",
     "MaskType",

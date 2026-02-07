@@ -2,7 +2,7 @@
 Calculator component for derived data computation.
 
 Provides a clean API for computing derived products from ingested data.
-Usage: container.compute.dynamics(...) instead of container.compute_dynamics(...)
+Usage: container.compute.dynamics(...)
 """
 
 from __future__ import annotations

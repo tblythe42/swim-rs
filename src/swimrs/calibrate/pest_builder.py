@@ -1005,7 +1005,6 @@ if __name__ == "__main__":
                 output_h5=h5_path,
                 start_date=self.config.start_dt,
                 end_date=self.config.end_dt,
-                runoff_process=getattr(self.config, "runoff_process", "cn"),
                 refet_type=getattr(self.config, "refet_type", "eto") or "eto",
             )
 
@@ -1082,7 +1081,6 @@ if __name__ == "__main__":
             spinup_json_path=spinup_path,
             start_date=self.config.start_dt,
             end_date=self.config.end_dt,
-            runoff_process=getattr(self.config, "runoff_process", "cn"),
             refet_type=getattr(self.config, "refet_type", "eto") or "eto",
         )
 

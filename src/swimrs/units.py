@@ -48,7 +48,6 @@ PROCESS_CANONICAL_UNITS: dict[str, str] = {
     "tmin": "C",
     "tmax": "C",
     "prcp": "mm/day",  # daily total
-    "prcp_hr": "mm/hr",  # hourly intensity, 24 values per day
     "ref_et": "mm/day",  # reference ET time series; see SwimInput.config['refet_type']
     "srad": "W/m^2",  # daily mean downward shortwave radiation
     # Snow
@@ -58,7 +57,7 @@ PROCESS_CANONICAL_UNITS: dict[str, str] = {
     "etf": "unitless",
     # Properties
     "awc": "mm/m",
-    "ksat": "mm/day",  # converted to mm/hr internally for IER runoff
+    "ksat": "mm/day",
 }
 
 

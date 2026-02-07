@@ -482,31 +482,31 @@ class Inventory:
 
         if not has_ndvi:
             suggestions.append(
-                "Ingest Landsat NDVI: container.ingest_ee_ndvi(source_dir, instrument='landsat', mask='irr')"
+                "Ingest Landsat NDVI: container.ingest.ndvi(source_dir, instrument='landsat', mask='irr')"
             )
 
         if not has_etf:
             suggestions.append(
-                "Ingest ETF data: container.ingest_ee_etf(source_dir, model='ssebop', mask='irr')"
+                "Ingest ETF data: container.ingest.etf(source_dir, model='ssebop', mask='irr')"
             )
 
         if not has_met:
             suggestions.append(
-                "Ingest meteorology: container.ingest_gridmet(met_dir) or container.ingest_era5(era5_dir)"
+                "Ingest meteorology: container.ingest.gridmet(met_dir) or container.ingest.era5(era5_dir)"
             )
 
         if not has_soils:
             suggestions.append(
-                "Ingest properties: container.ingest_properties(soils_csv='path/to/soils.csv')"
+                "Ingest properties: container.ingest.properties(soils_csv='path/to/soils.csv')"
             )
 
         if not has_irr:
             suggestions.append(
-                "Ingest irrigation: container.ingest_properties(irrigation_csv='path/to/irr.csv')"
+                "Ingest irrigation: container.ingest.properties(irrigation_csv='path/to/irr.csv')"
             )
 
         if has_ndvi and has_etf and has_met and has_irr and not has_dynamics:
-            suggestions.append("Compute dynamics: container.compute_dynamics()")
+            suggestions.append("Compute dynamics: container.compute.dynamics()")
 
         if has_dynamics:
             suggestions.append("Export model inputs: container.export_model_inputs(...)")

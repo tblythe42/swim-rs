@@ -1,16 +1,13 @@
 import json
 import os
-from datetime import timedelta
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import pytz
 from rasterstats import zonal_stats
 from tqdm import tqdm
 
 from swimrs.data_extraction.gridmet.thredds import GridMet
-from swimrs.utils.optional_deps import missing_optional_dependency
 
 CLIMATE_COLS = {
     "etr": {
@@ -192,10 +189,9 @@ def download_gridmet(
     target_fields=None,
     feature_id="FID",
     return_df=False,
-    use_nldas=False,
     gridmet_id_col="GFID",
 ):
-    """Download GridMET time series and optionally NLDAS-2 hourly precipitation.
+    """Download GridMET time series.
 
     Downloads one parquet file per unique GFID (GridMET cell). Each file contains
     simple column names (e.g., 'tmin', 'tmax', 'eto', 'eto_corr') without field-specific
@@ -217,7 +213,6 @@ def download_gridmet(
         target_fields: Optional list of field UIDs to filter GFIDs
         feature_id: Column name for field UID
         return_df: If True, return DataFrame after first download
-        use_nldas: If True, include hourly precipitation from NLDAS-2
     """
     if not start:
         start = "1987-01-01"
@@ -231,8 +226,6 @@ def download_gridmet(
     if gridmet_factors and os.path.exists(gridmet_factors):
         with open(gridmet_factors) as f:
             gridmet_factors_dict = json.load(f)
-
-    hr_cols = ["prcp_hr_{}".format(str(i).rjust(2, "0")) for i in range(0, 24)]
 
     # Get unique GFIDs to download
     if target_fields is not None:
@@ -307,43 +300,6 @@ def download_gridmet(
                     df["elev"] = elev
                     first = False
 
-                # Download NLDAS hourly precip if requested
-                if thredds_var == "pr" and use_nldas:
-                    try:
-                        import pynldas2 as nld
-                    except ImportError as exc:
-                        raise missing_optional_dependency(
-                            extra="nldas",
-                            purpose="NLDAS-2 hourly precipitation (runoff_process='ier')",
-                            import_name="pynldas2",
-                        ) from exc
-
-                    s_nldas = pd.to_datetime(dl_start) - timedelta(days=1)
-                    e_nldas = pd.to_datetime(dl_end) + timedelta(days=2)
-                    nldas = nld.get_bycoords(
-                        (lon, lat),
-                        start_date=s_nldas.strftime("%Y-%m-%d"),
-                        end_date=e_nldas.strftime("%Y-%m-%d"),
-                        variables=["prcp"],
-                    )
-                    if nldas.size == 0:
-                        raise ValueError(f"Failed to download NLDAS-2 for GFID {g_fid}")
-
-                    central = pytz.timezone("US/Central")
-                    nldas = nldas.tz_convert(central)
-                    hourly_ppt = nldas.pivot_table(
-                        columns=nldas.index.hour, index=nldas.index.date, values="prcp"
-                    )
-                    df[hr_cols] = hourly_ppt.loc[df.index]
-
-                    nan_ct = np.sum(np.isnan(df[hr_cols].values), axis=0)
-                    if sum(nan_ct) > 100:
-                        raise ValueError("Too many NaN in NLDAS data")
-                    if np.any(nan_ct):
-                        df[hr_cols] = df[hr_cols].fillna(0.0)
-
-                    df["nld_ppt_d"] = df[hr_cols].sum(axis=1)
-
             if df.empty:
                 print(f"No data downloaded for GFID {g_fid}")
                 continue
@@ -385,8 +341,6 @@ def download_gridmet(
                 "ea",
                 "elev",
             ]
-            if use_nldas:
-                out_cols.extend(["nld_ppt_d"] + hr_cols)
 
             # Keep only columns that exist
             out_cols = [c for c in out_cols if c in df.columns]
