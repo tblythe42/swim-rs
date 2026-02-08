@@ -191,6 +191,7 @@ def ingest_remote_sensing(
     print("\n=== Ingesting Remote Sensing ===")
 
     masks = ["irr", "inv_irr"]
+    etf_masks = ["irr", "inv_irr", "no_mask"]
     # SSEBop NHM is the sole ETf model for this example
     models = [cfg.etf_target_model]
     n_workers = cfg.workers or 1
@@ -231,7 +232,7 @@ def ingest_remote_sensing(
 
     # Ingest ETf for each model
     for model in models:
-        for mask in masks:
+        for mask in etf_masks:
             etf_dir = os.path.join(cfg.landsat_dir, "extracts", f"{model}_etf", mask)
             if os.path.isdir(etf_dir):
                 print(f"Ingesting ETf ({model}, {mask})...")

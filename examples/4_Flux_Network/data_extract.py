@@ -141,24 +141,21 @@ def extract_nhm_ssebop(cfg: ProjectConfig, sites=None) -> None:
     handled by the sparse extractor (IrrMapper for west, LANID for east).
     """
     is_authorized()
-    from swimrs.data_extraction.ee.etf_export import sparse_sample_etf
+    from ssebop_etf import extract_ssebop_nhm_etf
 
-    for mask in ["irr", "inv_irr"]:
+    for mask in ["irr", "inv_irr", "no_mask"]:
         dst = os.path.join(cfg.landsat_dir, "extracts", "ssebop_etf", mask)
-        sparse_sample_etf(
+        extract_ssebop_nhm_etf(
             cfg.fields_shapefile,
-            bucket=cfg.ee_bucket,
-            dest="bucket",
-            debug=False,
             mask_type=mask,
             check_dir=dst,
+            feature_id=cfg.feature_id_col,
+            select=sites,
             start_yr=cfg.start_dt.year,
             end_yr=cfg.end_dt.year,
-            feature_id=cfg.feature_id_col,
             state_col=cfg.state_col,
-            select=sites,
-            model="ssebop",
-            usgs_nhm=True,
+            dest="bucket",
+            bucket=cfg.ee_bucket,
             file_prefix=cfg.project_name,
         )
 
@@ -216,10 +213,16 @@ if __name__ == "__main__":
         default="all",
         help="Which extraction to run (default: all)",
     )
+    parser.add_argument(
+        "--sites",
+        type=str,
+        default=None,
+        help="Comma-separated site IDs (default: all)",
+    )
     args = parser.parse_args()
 
     config = _load_config()
-    select_sites = None
+    select_sites = [s.strip() for s in args.sites.split(",")] if args.sites else None
 
     if args.extract in ("all", "snodas"):
         extract_snodas(config)
