@@ -199,27 +199,24 @@ class TestGetRootingDepth:
 
     def test_known_cropland_code(self):
         """LULC 12 (cropland) returns expected depth."""
-        depth, mult = get_rooting_depth(12)
+        depth = get_rooting_depth(12)
         assert depth == ROOTING_DEPTH_BY_LULC[12].max_depth
-        assert mult == ROOTING_DEPTH_BY_LULC[12].zr_multiplier
 
     def test_use_max_false(self):
         """use_max=False returns mean depth instead of max."""
-        depth_max, _ = get_rooting_depth(12, use_max=True)
-        depth_mean, _ = get_rooting_depth(12, use_max=False)
+        depth_max = get_rooting_depth(12, use_max=True)
+        depth_mean = get_rooting_depth(12, use_max=False)
         assert depth_mean < depth_max
         assert depth_mean == ROOTING_DEPTH_BY_LULC[12].mean_depth
 
     def test_unknown_code_falls_back_to_cropland(self):
         """Unknown LULC code falls back to code 12 (cropland)."""
-        depth, mult = get_rooting_depth(999)
-        expected_depth, expected_mult = get_rooting_depth(12)
+        depth = get_rooting_depth(999)
+        expected_depth = get_rooting_depth(12)
         assert depth == expected_depth
-        assert mult == expected_mult
 
     def test_all_known_codes_return_positive_depth(self):
         """All known LULC codes return positive rooting depth."""
         for code in ROOTING_DEPTH_BY_LULC:
-            depth, mult = get_rooting_depth(code)
+            depth = get_rooting_depth(code)
             assert depth > 0, f"Code {code} has non-positive depth"
-            assert mult >= 1, f"Code {code} has multiplier < 1"

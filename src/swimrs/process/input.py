@@ -748,12 +748,7 @@ def _write_properties_from_container(
     )
 
     # Root depth
-    zr_max = np.array(
-        [
-            props.get(fid, {}).get("root_depth", 1.0) * props.get(fid, {}).get("zr_mult", 1.0)
-            for fid in fids
-        ]
-    )
+    zr_max = np.array([props.get(fid, {}).get("root_depth", 1.0) for fid in fids])
     zr_min = np.where(perennial, zr_max, 0.1)
 
     # Defaults

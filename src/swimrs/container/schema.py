@@ -160,7 +160,6 @@ class RootingDepthSpec:
 
     mean_depth: float  # Mean effective rooting depth (m)
     max_depth: float  # Maximum effective rooting depth (m)
-    zr_multiplier: int  # Multiplier for rootzone calculation
     description: str  # Land cover class description
 
 
@@ -174,80 +173,66 @@ ROOTING_DEPTH_BY_LULC: dict[int, RootingDepthSpec] = {
     1: RootingDepthSpec(
         mean_depth=0.43,
         max_depth=1.34,
-        zr_multiplier=5,
         description="Evergreen Needleleaf Forests: dominated by evergreen conifer trees (canopy >2m). Tree cover >60%.",
     ),
     2: RootingDepthSpec(
         mean_depth=3.14,
         max_depth=7.99,
-        zr_multiplier=2,
         description="Evergreen Broadleaf Forests: dominated by evergreen broadleaf and palmate trees (canopy >2m). Tree cover >60%.",
     ),
     3: RootingDepthSpec(
         mean_depth=0.38,
         max_depth=0.84,
-        zr_multiplier=5,
         description="Deciduous Needleleaf Forests: dominated by deciduous needleleaf (larch) trees (canopy >2m). Tree cover >60%.",
     ),
     4: RootingDepthSpec(
         mean_depth=1.07,
         max_depth=2.09,
-        zr_multiplier=5,
         description="Deciduous Broadleaf Forests: dominated by deciduous broadleaf trees (canopy >2m). Tree cover >60%.",
     ),
     5: RootingDepthSpec(
         mean_depth=0.54,
         max_depth=1.94,
-        zr_multiplier=5,
         description="Mixed Forests: dominated by neither deciduous nor evergreen (40-60% of each) tree type (canopy >2m). Tree cover >60%.",
     ),
     6: RootingDepthSpec(
         mean_depth=0.37,
         max_depth=1.12,
-        zr_multiplier=3,
         description="Closed Shrublands: dominated by woody perennials (1-2m height) >60% cover.",
     ),
     7: RootingDepthSpec(
         mean_depth=0.37,
         max_depth=1.12,
-        zr_multiplier=3,
         description="Open Shrublands: dominated by woody perennials (1-2m height) 10-60% cover.",
     ),
     8: RootingDepthSpec(
         mean_depth=0.80,
         max_depth=2.28,
-        zr_multiplier=3,
         description="Woody Savannas: tree cover 30-60% (canopy >2m).",
     ),
     9: RootingDepthSpec(
         mean_depth=0.80,
         max_depth=2.28,
-        zr_multiplier=3,
         description="Savannas: tree cover 10-30% (canopy >2m).",
     ),
     10: RootingDepthSpec(
         mean_depth=0.51,
         max_depth=1.18,
-        zr_multiplier=3,
         description="Grasslands: dominated by herbaceous annuals (<2m).",
     ),
-    11: RootingDepthSpec(mean_depth=0.37, max_depth=1.12, zr_multiplier=3, description="Wetlands"),
+    11: RootingDepthSpec(mean_depth=0.37, max_depth=1.12, description="Wetlands"),
     12: RootingDepthSpec(
         mean_depth=0.55,
         max_depth=1.12,
-        zr_multiplier=3,
         description="Cropland, same depth as shrublands",
     ),
-    13: RootingDepthSpec(mean_depth=0.55, max_depth=1.12, zr_multiplier=3, description="Developed"),
+    13: RootingDepthSpec(mean_depth=0.55, max_depth=1.12, description="Developed"),
     14: RootingDepthSpec(
         mean_depth=0.55,
         max_depth=1.12,
-        zr_multiplier=1,
         description="Cropland/Natural Mosaic, same depth as shrublands",
     ),
-    16: RootingDepthSpec(
-        mean_depth=0.41, max_depth=1.43, zr_multiplier=5, description="Desert vegetation."
-    ),
+    16: RootingDepthSpec(mean_depth=0.41, max_depth=1.43, description="Desert vegetation."),
 }
 
 # Required meteorology parameters for model input
@@ -262,29 +247,28 @@ ACCEPT_NAN_PARAMS: list[str] = REQUIRED_MET_IRR + REQUIRED_MET_UNIRR + ["swe"]
 COLUMN_MULTIINDEX: list[str] = ["site", "instrument", "parameter", "units", "algorithm", "mask"]
 
 
-def get_rooting_depth(lulc_code: int, use_max: bool = True) -> tuple[float, int]:
+def get_rooting_depth(lulc_code: int, use_max: bool = True) -> float:
     """
-    Get rooting depth and zr_multiplier for a given LULC code.
+    Get rooting depth for a given LULC code.
 
     Args:
         lulc_code: MODIS IGBP land cover type code (1-16)
         use_max: If True, return max rooting depth; otherwise mean
 
     Returns:
-        Tuple of (rooting_depth_m, zr_multiplier)
+        Rooting depth in meters
 
     Example:
-        >>> depth, mult = get_rooting_depth(12)  # Cropland
-        >>> print(f"Depth: {depth}m, Multiplier: {mult}")
-        Depth: 1.12m, Multiplier: 3
+        >>> depth = get_rooting_depth(12)  # Cropland
+        >>> print(f"Depth: {depth}m")
+        Depth: 1.12m
     """
     if lulc_code not in ROOTING_DEPTH_BY_LULC:
         # Default to cropland if unknown
         lulc_code = 12
 
     spec = ROOTING_DEPTH_BY_LULC[lulc_code]
-    depth = spec.max_depth if use_max else spec.mean_depth
-    return depth, spec.zr_multiplier
+    return spec.max_depth if use_max else spec.mean_depth
 
 
 class SwimSchema:

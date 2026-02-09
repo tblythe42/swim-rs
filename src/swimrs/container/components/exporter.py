@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from swimrs.container.schema import get_rooting_depth
+
 from .base import Component
 
 if TYPE_CHECKING:
@@ -601,6 +603,17 @@ class Exporter(Component):
                         field_props[bool_prop] = bool(val)
                     except (KeyError, TypeError):
                         continue
+
+            # Derive root_depth and lulc_code from MODIS land cover
+            if "modis_lc" in props_ds:
+                try:
+                    lc_val = props_ds["modis_lc"].sel(site=field_uid).values
+                    if not np.isnan(lc_val):
+                        lulc_code = int(lc_val)
+                        field_props["lulc_code"] = lulc_code
+                        field_props["root_depth"] = get_rooting_depth(lulc_code)
+                except (KeyError, TypeError):
+                    pass
 
             if field_props:
                 props[field_uid] = field_props
