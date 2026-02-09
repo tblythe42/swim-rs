@@ -39,7 +39,6 @@ def extract_ssebop_nhm_etf(
     dest="bucket",
     bucket=None,
     file_prefix="swim",
-    batch_size=30,
 ):
     """Export per-field SSEBop NHM ETf zonal statistics.
 
@@ -69,8 +68,6 @@ def extract_ssebop_nhm_etf(
         GCS bucket name (required if ``dest='bucket'``).
     file_prefix : str
         Bucket path prefix.
-    batch_size : int
-        Number of scenes per export batch.
     """
     if dest == "bucket" and not bucket:
         raise ValueError("bucket is required when dest='bucket'")
@@ -115,72 +112,61 @@ def extract_ssebop_nhm_etf(
 
             scene_ids = sorted(etf_scenes.keys(), key=lambda s: s.split("_")[-1])
 
-            # Process in batches
-            n_batches = (len(scene_ids) + batch_size - 1) // batch_size
+            desc = f"ssebop_etf_{fid}_{mask_type}_{year}"
 
-            for batch_idx in range(n_batches):
-                batch_start = batch_idx * batch_size
-                batch_end = min(batch_start + batch_size, len(scene_ids))
-                batch_scenes = scene_ids[batch_start:batch_end]
-
-                if n_batches > 1:
-                    desc = f"ssebop_etf_{fid}_{mask_type}_{year}_b{batch_idx:02d}"
-                else:
-                    desc = f"ssebop_etf_{fid}_{mask_type}_{year}"
-
-                if check_dir:
-                    check_path = os.path.join(check_dir, f"{desc}.csv")
-                    if os.path.exists(check_path):
-                        skipped += 1
-                        continue
-
-                fn_prefix = (
-                    f"{file_prefix}/remote_sensing/landsat/extracts/ssebop_etf/{mask_type}/{desc}"
-                )
-
-                first, bands = True, None
-                selectors = [feature_id]
-
-                for img_id in batch_scenes:
-                    _name = parse_scene_name(img_id)
-                    selectors.append(_name)
-
-                    etf_img = (
-                        ee.Image(f"{NHM_SSEBOP}/{img_id}")
-                        .select("et_fraction")
-                        .divide(10000)
-                        .rename(_name)
-                    )
-
-                    # Apply masking
-                    if mask_type == "irr":
-                        etf_img = etf_img.clip(polygon).mask(irr_mask)
-                    elif mask_type == "inv_irr":
-                        etf_img = etf_img.clip(polygon).mask(irr.gt(0))
-                    else:
-                        etf_img = etf_img.clip(polygon)
-
-                    if first:
-                        bands = etf_img
-                        first = False
-                    else:
-                        bands = bands.addBands([etf_img])
-
-                if bands is None:
+            if check_dir:
+                check_path = os.path.join(check_dir, f"{desc}.csv")
+                if os.path.exists(check_path):
+                    skipped += 1
                     continue
 
-                fc = build_feature_collection(polygon, fid, feature_id)
-                data = bands.reduceRegions(collection=fc, reducer=ee.Reducer.mean(), scale=30)
+            fn_prefix = (
+                f"{file_prefix}/remote_sensing/landsat/extracts/ssebop_etf/{mask_type}/{desc}"
+            )
 
-                export_table(
-                    data=data,
-                    desc=desc,
-                    selectors=selectors,
-                    dest=dest,
-                    bucket=bucket,
-                    fn_prefix=fn_prefix,
+            first, bands = True, None
+            selectors = [feature_id]
+
+            for img_id in scene_ids:
+                _name = parse_scene_name(img_id)
+                selectors.append(_name)
+
+                etf_img = (
+                    ee.Image(f"{NHM_SSEBOP}/{img_id}")
+                    .select("et_fraction")
+                    .divide(10000)
+                    .rename(_name)
                 )
-                exported += 1
+
+                # Apply masking
+                if mask_type == "irr":
+                    etf_img = etf_img.clip(polygon).mask(irr_mask)
+                elif mask_type == "inv_irr":
+                    etf_img = etf_img.clip(polygon).mask(irr.gt(0))
+                else:
+                    etf_img = etf_img.clip(polygon)
+
+                if first:
+                    bands = etf_img
+                    first = False
+                else:
+                    bands = bands.addBands([etf_img])
+
+            if bands is None:
+                continue
+
+            fc = build_feature_collection(polygon, fid, feature_id)
+            data = bands.reduceRegions(collection=fc, reducer=ee.Reducer.mean(), scale=30)
+
+            export_table(
+                data=data,
+                desc=desc,
+                selectors=selectors,
+                dest=dest,
+                bucket=bucket,
+                fn_prefix=fn_prefix,
+            )
+            exported += 1
 
     print(f"SSEBop NHM ETf: exported {exported}, skipped {skipped}")
 
