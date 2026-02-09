@@ -207,6 +207,68 @@ def extract_openet_etf(
             )
 
 
+def extract_openet_etf_assets(
+    cfg: ProjectConfig,
+    sites=None,
+    models=None,
+    mask_types=None,
+) -> None:
+    """Extract ETf from pre-computed OpenET EE asset collections (fast).
+
+    Reads from official OpenET image collections on Earth Engine instead of
+    running the FOSS packages on-the-fly.
+
+    Parameters
+    ----------
+    cfg : ProjectConfig
+        Project configuration object.
+    sites : list, optional
+        List of site IDs to process. If None, processes all sites.
+    models : list, optional
+        Model names: 'ptjpl', 'sims', 'ssebop', 'geesebal', 'ensemble'.
+        If None, extracts all 4 FOSS models.
+    mask_types : list, optional
+        Irrigation mask types: 'no_mask', 'irr', 'inv_irr'.
+        Default: ['no_mask'].
+    """
+    is_authorized()
+
+    from etf_asset_extract import extract_etf_assets
+
+    if models is None:
+        models = ["ptjpl", "sims", "ssebop", "geesebal"]
+
+    if mask_types is None:
+        mask_types = ["no_mask"]
+
+    for mask_type in mask_types:
+        print(f"\n{'#' * 60}")
+        print(f"Asset extraction — mask type: {mask_type}")
+        print(f"{'#' * 60}")
+
+        for model in models:
+            chk_dir = os.path.join(cfg.landsat_dir, "extracts", "openet", f"{model}_etf", mask_type)
+
+            print(f"\n{'=' * 60}")
+            print(f"Extracting {model.upper()} ETf from EE assets ({mask_type})")
+            print(f"{'=' * 60}")
+
+            extract_etf_assets(
+                shapefile=cfg.fields_shapefile,
+                bucket=cfg.ee_bucket,
+                feature_id=cfg.feature_id_col,
+                model=model,
+                mask_type=mask_type,
+                start_yr=cfg.start_dt.year,
+                end_yr=cfg.end_dt.year,
+                check_dir=chk_dir,
+                state_col=cfg.state_col,
+                select=sites,
+                file_prefix=cfg.project_name,
+                dest="bucket",
+            )
+
+
 def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
     from swimrs.data_extraction.gridmet.gridmet import (
         assign_gridmet_ids,
@@ -262,16 +324,21 @@ if __name__ == "__main__":
     # Standard extraction workflow
     # extract_snodas(config)
     # extract_properties(config)
-    extract_ndvi(config, select_sites, get_sentinel=True)
+    # extract_ndvi(config, select_sites, get_sentinel=True)
     # extract_gridmet(config, select_sites)
 
-    # OpenET ETf extraction using the etf/ package modules
-    # This extracts zonal statistics for all 5 open source OpenET models:
-    # PT-JPL, SIMS, SSEBop, DisALEXI, and geeSEBAL
-    # Default mask_types=['irr', 'inv_irr'] matches example 4 workflow
-    extract_openet_etf(
+    # Fast: extract from pre-computed OpenET EE asset collections
+    extract_openet_etf_assets(
         config,
         sites=select_sites,
         models=["ptjpl", "sims", "ssebop", "geesebal"],
-        mask_types=["irr"],
+        mask_types=["no_mask"],
     )
+
+    # Slow: compute ETf on-the-fly using OpenET FOSS packages
+    # extract_openet_etf(
+    #     config,
+    #     sites=select_sites,
+    #     models=["ptjpl", "sims", "ssebop", "geesebal"],
+    #     mask_types=["irr"],
+    # )

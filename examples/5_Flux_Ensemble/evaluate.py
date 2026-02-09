@@ -91,7 +91,6 @@ def run_calibrated_model(cfg, container, fids, calibrated_params):
             calibrated_params_path=params_json,
             start_date=cfg.start_dt,
             end_date=cfg.end_dt,
-            runoff_process=getattr(cfg, "runoff_process", "cn"),
             refet_type=getattr(cfg, "refet_type", "eto") or "eto",
             fields=fids,
         )
@@ -130,6 +129,25 @@ def load_flux_et(fid, flux_dir):
     if "ET_corr" in df.columns:
         return df["ET_corr"]
     return pd.Series(dtype=float)
+
+
+def load_openet_etf_nomask(container, fid):
+    """Load per-model ETf from the container using no_mask (unmasked) data.
+
+    Returns {model_name: pd.Series} of ETf values without irrigation masking.
+    """
+    etf_by_model = {}
+    for model in OPEN_SOURCE_MODELS:
+        etf_path = f"remote_sensing/etf/landsat/{model}/no_mask"
+        try:
+            etf_df = container.query.dataframe(etf_path, fields=[fid])
+            if fid in etf_df.columns:
+                series = etf_df[fid]
+                if series.notna().any():
+                    etf_by_model[model] = series
+        except Exception:
+            pass
+    return etf_by_model
 
 
 def load_openet_etf(container, fid, irr_data):
@@ -227,9 +245,14 @@ def calc_metrics(obs, mod):
 def _get_diy_openet(container, fid, irr_data, etref):
     """DIY: interpolate our sparse ETf to daily, then multiply by daily ETo.
 
+    Tries no_mask ETf first (unmasked, for fair OpenET comparison), then
+    falls back to irr/inv_irr masked ETf.
+
     Returns {model_name: pd.Series} of daily ET (interpolated ETf × ETo).
     """
-    etf_by_model = load_openet_etf(container, fid, irr_data)
+    etf_by_model = load_openet_etf_nomask(container, fid)
+    if not etf_by_model:
+        etf_by_model = load_openet_etf(container, fid, irr_data)
     et_daily = {}
     for model_name, etf_series in etf_by_model.items():
         etf_interp = etf_series.interpolate(method="linear")
@@ -431,41 +454,45 @@ def evaluate_etf(cfg, container, par_csv, fids):
             except (ValueError, TypeError):
                 continue
 
+        # Try no_mask ETf first for this field
+        nomask_etf = load_openet_etf_nomask(container, fid)
+
         for model in OPEN_SOURCE_MODELS:
-            # Load ETf from both masks, combine by year
-            etf_inv = etf_irr = None
-            for mask in ["inv_irr", "irr"]:
-                path = f"remote_sensing/etf/landsat/{model}/{mask}"
-                try:
-                    etf_df = container.query.dataframe(path, fields=[fid])
-                    if fid in etf_df.columns:
-                        series = etf_df[fid]
-                        if mask == "inv_irr":
-                            etf_inv = series
-                        else:
-                            etf_irr = series
-                except Exception:
-                    pass
-
-            if etf_inv is None and etf_irr is None:
-                continue
-
-            # Build combined series using year-appropriate mask.
-            # Fall back to whichever mask has data.
-            inv_valid = etf_inv is not None and etf_inv.dropna().any()
-            irr_valid = etf_irr is not None and etf_irr.dropna().any()
-
-            if inv_valid and irr_valid:
-                combined = etf_inv.copy()
-                if irr_years:
-                    irr_mask = combined.index.year.isin(irr_years)
-                    combined.loc[irr_mask] = etf_irr.loc[irr_mask]
-            elif irr_valid:
-                combined = etf_irr
-            elif inv_valid:
-                combined = etf_inv
+            # Prefer no_mask ETf; fall back to irr/inv_irr masked
+            if model in nomask_etf:
+                combined = nomask_etf[model]
             else:
-                continue
+                etf_inv = etf_irr = None
+                for mask in ["inv_irr", "irr"]:
+                    path = f"remote_sensing/etf/landsat/{model}/{mask}"
+                    try:
+                        etf_df = container.query.dataframe(path, fields=[fid])
+                        if fid in etf_df.columns:
+                            series = etf_df[fid]
+                            if mask == "inv_irr":
+                                etf_inv = series
+                            else:
+                                etf_irr = series
+                    except Exception:
+                        pass
+
+                if etf_inv is None and etf_irr is None:
+                    continue
+
+                inv_valid = etf_inv is not None and etf_inv.dropna().any()
+                irr_valid = etf_irr is not None and etf_irr.dropna().any()
+
+                if inv_valid and irr_valid:
+                    combined = etf_inv.copy()
+                    if irr_years:
+                        irr_mask = combined.index.year.isin(irr_years)
+                        combined.loc[irr_mask] = etf_irr.loc[irr_mask]
+                elif irr_valid:
+                    combined = etf_irr
+                elif inv_valid:
+                    combined = etf_inv
+                else:
+                    continue
 
             obs_etf = combined.dropna()
             obs_etf = obs_etf[obs_etf > 0]
