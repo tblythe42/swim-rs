@@ -40,6 +40,7 @@ class ETModel(str, Enum):
     EEMETRIC = "eemetric"
     DISALEXI = "disalexi"
     GEESEBAL = "geesebal"
+    ENSEMBLE = "ensemble"
 
 
 class MetSource(str, Enum):
