@@ -260,7 +260,7 @@ def extract_openet_etf_assets(
     from swimrs.data_extraction.ee import export_etf
 
     if models is None:
-        models = ["ssebop", "sims", "geesebal", "eemetric", "ensemble"]
+        models = ["ssebop", "sims", "geesebal", "eemetric", "ensemble", "ptjpl", "disalexi"]
 
     if mask_types is None:
         mask_types = ["no_mask"]
@@ -357,7 +357,7 @@ if __name__ == "__main__":
     extract_openet_etf_assets(
         config,
         sites=select_sites,
-        models=["ssebop", "sims", "geesebal", "eemetric", "ensemble"],
+        models=["ssebop", "sims", "geesebal", "eemetric", "ensemble", "ptjpl", "disalexi"],
         mask_types=["no_mask"],
     )
 

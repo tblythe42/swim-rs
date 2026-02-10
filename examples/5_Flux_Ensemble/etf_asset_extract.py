@@ -11,7 +11,6 @@ Usage:
 """
 
 import os
-import warnings
 
 import ee
 from tqdm import tqdm
@@ -35,10 +34,9 @@ ASSET_PATHS = {
     "geesebal": f"{CACHED_ROOT}/geesebal",
     "eemetric": f"{CACHED_ROOT}/eemetric",
     "ensemble": f"{CACHED_ROOT}/ensemble",
+    "ptjpl": f"{CACHED_ROOT}/ptjpl",
+    "disalexi": f"{CACHED_ROOT}/disalexi",
 }
-
-# Models not yet available at v2.1 — access pending
-_PENDING_MODELS = {"ptjpl", "disalexi"}
 
 
 def _get_etf_image(model, img_id, polygon):
@@ -110,14 +108,6 @@ def extract_etf_assets(
     dest : str
         Export destination: 'drive' or 'bucket'.
     """
-    if model in _PENDING_MODELS:
-        warnings.warn(
-            f"Model '{model}' is not yet available at v2.1 — access pending. "
-            f"Available models: {sorted(ASSET_PATHS)}",
-            UserWarning,
-        )
-        return
-
     if model not in ASSET_PATHS:
         raise ValueError(f"Unknown model: {model}. Available: {list(ASSET_PATHS)}")
 

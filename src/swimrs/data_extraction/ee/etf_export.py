@@ -320,9 +320,9 @@ def export_etf(
     ValueError
         If model is unknown or bucket required but not provided.
     """
-    if model not in {"ptjpl", "ssebop", "sims", "geesebal", "eemetric", "ensemble"}:
+    if model not in {"ptjpl", "ssebop", "sims", "geesebal", "eemetric", "ensemble", "disalexi"}:
         raise ValueError(
-            f"Unknown model: {model}. Available: ptjpl, ssebop, sims, geesebal, eemetric, ensemble"
+            f"Unknown model: {model}. Available: ptjpl, ssebop, sims, geesebal, eemetric, ensemble, disalexi"
         )
 
     if dest == "bucket" and not bucket:

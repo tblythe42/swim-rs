@@ -14,6 +14,8 @@ Usage:
         [--sites SITE1,SITE2] [--buffer 4000]
 """
 
+import time
+
 import ee
 import geopandas as gpd
 from pyproj import CRS
@@ -21,13 +23,14 @@ from shapely.ops import unary_union
 from tqdm import tqdm
 
 # OpenET v2.1 source collections
-# NOTE: ptjpl and disalexi are not yet available at v2.1 — access pending
 OPENET_SOURCES = {
     "ssebop": "projects/openet/assets/ssebop/conus/gridmet/landsat/v2_1",
     "sims": "projects/openet/assets/sims/conus/gridmet/landsat/v2_1",
     "geesebal": "projects/openet/assets/geesebal/conus/gridmet/landsat/v2_1",
     "eemetric": "projects/openet/assets/eemetric/conus/gridmet/landsat/v2_1",
     "ensemble": "projects/openet/assets/ensemble/conus/gridmet/landsat/v2_1",
+    "ptjpl": "projects/openet/assets/ptjpl/conus/nldas2/landsat/v2_1",
+    "disalexi": "projects/openet/assets/disalexi/conus/cfsr/landsat/v2_1",
 }
 
 DEST_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
@@ -36,7 +39,7 @@ DEST_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
 REFET_COLLECTION = "projects/openet/assets/reference_et/conus/gridmet/daily/v1"
 
 # Models where the band is already ETf (et_fraction / 10000)
-DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric"}
+DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric", "ptjpl", "disalexi"}
 
 # Models where the band is ET (et / 1000) and must be divided by ETo
 ET_BAND_MODELS = {"geesebal"}
@@ -151,6 +154,58 @@ def _list_existing_images(collection_path):
         return set()
 
 
+def _get_pending_task_descriptions():
+    """Return set of descriptions for READY and RUNNING EE export tasks."""
+    ops = ee.data.listOperations()
+    pending = set()
+    for op in ops:
+        meta = op.get("metadata", {})
+        state = meta.get("state", "")
+        if state in ("PENDING", "RUNNING", "READY"):
+            desc = meta.get("description", "")
+            if desc:
+                pending.add(desc)
+    return pending
+
+
+def _start_export(task, desc, max_retries=6, wait_minutes=10):
+    """Start an EE export task, retrying on queue-full errors.
+
+    Parameters
+    ----------
+    task : ee.batch.Task
+        Export task to start.
+    desc : str
+        Task description (for logging).
+    max_retries : int
+        Maximum retries on queue-full.
+    wait_minutes : int
+        Minutes to wait between retries.
+
+    Returns
+    -------
+    bool
+        True if started, False if permanently failed.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            task.start()
+            return True
+        except ee.ee_exception.EEException as e:
+            msg = str(e)
+            if "many tasks already in the queue" in msg:
+                if attempt < max_retries:
+                    print(f"Queue full. Waiting {wait_minutes}min to retry {desc}...")
+                    time.sleep(wait_minutes * 60)
+                else:
+                    print(f"Queue still full after {max_retries} retries, giving up on {desc}")
+                    return False
+            else:
+                print(f"Export error for {desc}: {msg}")
+                return False
+    return False
+
+
 def copy_openet_to_assets(
     shapefile,
     model,
@@ -201,17 +256,21 @@ def copy_openet_to_assets(
     union_geom = _build_union_geometry(shapefile, feature_id, buffer_m, select)
     print("Built union geometry from buffered sites")
 
-    # Ensure destination folder hierarchy and collection exist
-    _ensure_asset_exists("projects/ee-dgketchum/assets/openet_etf", "FOLDER")
+    # Ensure destination folder and collection exist
     _ensure_asset_exists(DEST_ROOT, "FOLDER")
     _ensure_asset_exists(dst_path, "IMAGE_COLLECTION")
 
-    # Check what's already copied
+    # Check what's already copied to the destination collection
     existing = _list_existing_images(dst_path)
     if existing:
         print(f"Found {len(existing)} existing images in destination, will skip")
 
-    submitted = 0
+    # Check in-flight EE tasks so we don't duplicate ongoing exports
+    pending_tasks = _get_pending_task_descriptions()
+    if pending_tasks:
+        print(f"Found {len(pending_tasks)} pending/running EE tasks, will skip duplicates")
+
+    submitted, skipped = 0, 0
 
     for year in tqdm(range(start_yr, end_yr + 1), desc=f"Copy {model}"):
         # Discover scenes for this year
@@ -229,6 +288,13 @@ def copy_openet_to_assets(
 
         for img_id in scene_ids:
             if img_id in existing:
+                skipped += 1
+                continue
+
+            desc = f"copy_{model}_{img_id}".replace("/", "_")[:100]
+
+            if desc in pending_tasks:
+                skipped += 1
                 continue
 
             src_image = ee.Image(f"{src_path}/{img_id}")
@@ -237,18 +303,19 @@ def copy_openet_to_assets(
             # Clip to union geometry
             etf_clipped = etf_image.clip(union_geom)
 
-            # Copy key properties for provenance
-            etf_out = etf_clipped.copyProperties(
-                src_image,
-                [
-                    "system:time_start",
-                    "system:index",
-                    "SPACECRAFT_ID",
-                ],
-            ).set("source_collection", src_path)
+            # Copy key properties for provenance (cast back to Image)
+            etf_out = ee.Image(
+                etf_clipped.copyProperties(
+                    src_image,
+                    [
+                        "system:time_start",
+                        "system:index",
+                        "SPACECRAFT_ID",
+                    ],
+                ).set("source_collection", src_path)
+            )
 
             dest_id = f"{dst_path}/{img_id}"
-            desc = f"copy_{model}_{img_id}".replace("/", "_")[:100]
 
             task = ee.batch.Export.image.toAsset(
                 image=etf_out,
@@ -259,10 +326,11 @@ def copy_openet_to_assets(
                 crs="EPSG:5070",
                 maxPixels=1e13,
             )
-            task.start()
-            submitted += 1
 
-    print(f"Submitted {submitted} export tasks for {model}")
+            if _start_export(task, desc):
+                submitted += 1
+
+    print(f"Submitted {submitted} export tasks for {model} (skipped {skipped})")
 
 
 if __name__ == "__main__":
