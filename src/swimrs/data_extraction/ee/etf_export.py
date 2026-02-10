@@ -1,8 +1,13 @@
 """
-Unified ETf (ET fraction) export module using OpenET FOSS packages.
+Unified ETf (ET fraction) export module.
 
-This module provides a single interface for exporting ET fraction zonal statistics
-using the open-source OpenET Python packages (openet-ptjpl, openet-ssebop, etc.).
+This module provides a single interface for exporting ET fraction zonal statistics.
+Two source modes are supported:
+
+- ``source="foss"``: Compute ETf on-the-fly using OpenET FOSS packages
+  (openet-ptjpl, openet-ssebop, etc.).  Requires the optional ``openet`` extras.
+- ``source="asset"``: Read pre-computed ETf from user-owned cached EE
+  ImageCollections (no openet-* packages required).
 
 Functions
 ---------
@@ -51,6 +56,8 @@ def _get_openet_module(model: str):
             import openet.sims as mod
         elif model == "geesebal":
             import openet.geesebal as mod
+        elif model == "eemetric":
+            import openet.eemetric as mod
         else:
             raise ValueError(f"Unknown model: {model}")
 
@@ -73,6 +80,9 @@ ET_REF_RESAMPLE = "bilinear"
 
 # Models that need ET computed then divided by refET (vs direct et_fraction)
 MODELS_NEED_ET_DIVISION = {"ptjpl", "geesebal"}
+
+# Default asset collection root (user-owned cached copies of OpenET ETf)
+ASSET_COLLECTION_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
 
 
 def _compute_etf_image(model: str, img_id: str) -> ee.Image:
@@ -127,6 +137,10 @@ def _compute_etf_image(model: str, img_id: str) -> ee.Image:
         )
         return img.et_fraction
 
+    elif model == "eemetric":
+        img = mod.Image.from_landsat_c2_sr(img_id)
+        return img.et_fraction
+
     else:
         raise ValueError(f"Unknown model: {model}")
 
@@ -174,6 +188,65 @@ def _check_pathrow_warning(
         )
 
 
+def _get_scenes_for_year_asset(
+    model: str,
+    year: int,
+    geometry: ee.Geometry,
+    asset_root: str | None = None,
+) -> list[str]:
+    """Discover scenes from a cached asset collection for a given year.
+
+    Parameters
+    ----------
+    model : str
+        Model name (subdirectory under asset root).
+    year : int
+        Calendar year.
+    geometry : ee.Geometry
+        Geometry to filter scenes.
+    asset_root : str, optional
+        Override asset collection root.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of scene IDs (system:index values).
+    """
+    coll_path = f"{asset_root or ASSET_COLLECTION_ROOT}/{model}"
+    coll = (
+        ee.ImageCollection(coll_path)
+        .filterDate(f"{year}-01-01", f"{year}-12-31")
+        .filterBounds(geometry)
+    )
+    scenes = coll.aggregate_histogram("system:index").getInfo()
+    return sorted(scenes.keys(), key=lambda s: s.split("_")[-1])
+
+
+def _load_etf_from_asset(
+    model: str,
+    img_id: str,
+    asset_root: str | None = None,
+) -> ee.Image:
+    """Load a pre-computed ETf image from a cached asset collection.
+
+    Parameters
+    ----------
+    model : str
+        Model name (subdirectory under asset root).
+    img_id : str
+        Scene system:index within the collection.
+    asset_root : str, optional
+        Override asset collection root.
+
+    Returns
+    -------
+    ee.Image
+        Single-band ``etf`` image.
+    """
+    coll_path = f"{asset_root or ASSET_COLLECTION_ROOT}/{model}"
+    return ee.Image(f"{coll_path}/{img_id}").select("etf")
+
+
 def export_etf(
     shapefile: str,
     model: str,
@@ -192,16 +265,18 @@ def export_etf(
     file_prefix: str = "swim",
     clustered: bool = True,
     pathrow_threshold: int = 4,
+    source: str = "foss",
 ) -> None:
     """
-    Export ETf zonal statistics using OpenET FOSS packages.
+    Export ETf zonal statistics.
 
     Parameters
     ----------
     shapefile : str
         Path to polygon shapefile with feature IDs.
     model : str
-        OpenET model: 'ptjpl', 'ssebop', 'sims', or 'geesebal'.
+        OpenET model: 'ptjpl', 'ssebop', 'sims', 'geesebal', 'eemetric',
+        or 'ensemble'.
     feature_id : str
         Field name for feature identifier.
     select : list, optional
@@ -233,22 +308,32 @@ def export_etf(
         If False, export one task per field-year (required for dispersed fields).
     pathrow_threshold : int
         Warn if clustered=True but more than this many path/rows detected.
+    source : str
+        Data source: ``"foss"`` to compute ETf on-the-fly using OpenET FOSS
+        packages, or ``"asset"`` to read from cached EE ImageCollections
+        (no openet-* packages required).
 
     Raises
     ------
     ImportError
-        If required openet-* package is not installed.
+        If required openet-* package is not installed (``source="foss"`` only).
     ValueError
         If model is unknown or bucket required but not provided.
     """
-    if model not in {"ptjpl", "ssebop", "sims", "geesebal"}:
-        raise ValueError(f"Unknown model: {model}. Available: ptjpl, ssebop, sims, geesebal")
+    if model not in {"ptjpl", "ssebop", "sims", "geesebal", "eemetric", "ensemble"}:
+        raise ValueError(
+            f"Unknown model: {model}. Available: ptjpl, ssebop, sims, geesebal, eemetric, ensemble"
+        )
 
     if dest == "bucket" and not bucket:
         raise ValueError("bucket is required when dest='bucket'")
 
-    # Validate openet package is available
-    _get_openet_module(model)
+    if source not in ("foss", "asset"):
+        raise ValueError(f"Unknown source: {source}. Available: foss, asset")
+
+    # Only validate openet package when using FOSS source
+    if source == "foss":
+        _get_openet_module(model)
 
     if clustered:
         _export_etf_clustered(
@@ -267,6 +352,7 @@ def export_etf(
             drive_folder=drive_folder,
             file_prefix=file_prefix,
             pathrow_threshold=pathrow_threshold,
+            source=source,
         )
     else:
         _export_etf_sparse(
@@ -285,6 +371,7 @@ def export_etf(
             bucket=bucket,
             drive_folder=drive_folder,
             file_prefix=file_prefix,
+            source=source,
         )
 
 
@@ -304,6 +391,7 @@ def _export_etf_sparse(
     bucket: str | None,
     drive_folder: str,
     file_prefix: str,
+    source: str = "foss",
 ) -> None:
     """Export ETf with one task per field-year (sparse mode)."""
     df = load_shapefile(shapefile, feature_id, buffer=buffer)
@@ -329,7 +417,10 @@ def _export_etf_sparse(
             else:
                 irr, irr_mask = None, None
 
-            scenes = _get_scenes_for_year(model, year, polygon)
+            if source == "asset":
+                scenes = _get_scenes_for_year_asset(model, year, polygon)
+            else:
+                scenes = _get_scenes_for_year(model, year, polygon)
             if not scenes:
                 continue
 
@@ -363,7 +454,10 @@ def _export_etf_sparse(
                     selectors.append(_name)
 
                     try:
-                        etf_img = _compute_etf_image(model, img_id).rename(_name)
+                        if source == "asset":
+                            etf_img = _load_etf_from_asset(model, img_id).rename(_name)
+                        else:
+                            etf_img = _compute_etf_image(model, img_id).rename(_name)
                     except ee.ee_exception.EEException as e:
                         print(f"{_name} error: {e}")
                         continue
@@ -415,6 +509,7 @@ def _export_etf_clustered(
     drive_folder: str,
     file_prefix: str,
     pathrow_threshold: int,
+    source: str = "foss",
 ) -> None:
     """Export ETf with one task per year (clustered mode)."""
     # Build FeatureCollection from shapefile
@@ -465,12 +560,15 @@ def _export_etf_clustered(
         else:
             irr, irr_mask = None, None
 
-        scenes = _get_scenes_for_year(model, year, fc_geometry)
+        if source == "asset":
+            scenes = _get_scenes_for_year_asset(model, year, fc_geometry)
+        else:
+            scenes = _get_scenes_for_year(model, year, fc_geometry)
         if not scenes:
             continue
 
         # Check pathrow warning once per export
-        if not pathrow_warned:
+        if not pathrow_warned and source == "foss":
             _check_pathrow_warning(
                 scenes,
                 clustered=True,
@@ -509,7 +607,10 @@ def _export_etf_clustered(
                 selectors.append(_name)
 
                 try:
-                    etf_img = _compute_etf_image(model, img_id).rename(_name)
+                    if source == "asset":
+                        etf_img = _load_etf_from_asset(model, img_id).rename(_name)
+                    else:
+                        etf_img = _compute_etf_image(model, img_id).rename(_name)
                 except ee.ee_exception.EEException as e:
                     print(f"{_name} error: {e}")
                     continue

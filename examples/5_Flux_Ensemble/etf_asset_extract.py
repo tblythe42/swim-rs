@@ -1,30 +1,17 @@
-"""Extract ETf from pre-computed OpenET EE asset collections.
+"""Extract ETf from pre-computed OpenET v2.1 EE asset collections.
 
-Reads from the official OpenET image collections on Earth Engine rather than
-running the FOSS packages on-the-fly.  This is much faster because the ETf
-images are already computed — we just need to do zonal stats.
-
-Supported models and their EE assets / band logic:
-
-- **ssebop**: ``projects/openet/assets/ssebop/conus/gridmet/landsat/c02``
-  — ``et_fraction`` / 10000
-- **sims**: ``projects/openet/assets/sims/conus/gridmet/landsat/c02``
-  — ``et_fraction`` / 10000
-- **ptjpl**: ``projects/openet/assets/ptjpl/conus/gridmet/landsat/c02``
-  — ``et`` / 1000 / ETo  (ET band, convert to ETf)
-- **geesebal**: ``projects/openet/assets/geesebal/conus/gridmet/landsat/c02``
-  — ``et`` / 1000 / ETo  (ET band, convert to ETf)
-- **ensemble**: ``projects/openet/assets/ensemble/conus/gridmet/landsat/c02``
-  — ``et_ensemble_mad`` / 10000
-- **ssebop_nhm**: ``projects/usgs-gee-nhm-ssebop/assets/ssebop/landsat/c02``
-  — ``et_fraction`` / 10000
+Reads from user-owned cached EE ImageCollections that contain pre-normalized
+ETf (single ``etf`` band, float, 0-2 range).  These cached copies are created
+by ``copy_openet_assets.py`` and live under
+``projects/ee-dgketchum/assets/openet_etf/v2_1/{model}``.
 
 Usage:
-    python etf_asset_extract.py --shapefile <path> --model ptjpl \\
+    python etf_asset_extract.py --shapefile <path> --model ssebop \\
         [--mask no_mask] [--sites SITE1,SITE2] [--bucket BUCKET]
 """
 
 import os
+import warnings
 
 import ee
 from tqdm import tqdm
@@ -38,31 +25,26 @@ from swimrs.data_extraction.ee.common import (
     setup_irrigation_masks,
 )
 
-# EE asset paths for pre-computed OpenET collections
+# Cached user-owned EE asset collections (created by copy_openet_assets.py).
+# These contain pre-normalized ETf: single "etf" band, float, 0-2 range.
+CACHED_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
+
 ASSET_PATHS = {
-    "ssebop": "projects/openet/assets/ssebop/conus/gridmet/landsat/c02",
-    "sims": "projects/openet/assets/sims/conus/gridmet/landsat/c02",
-    "ptjpl": "projects/openet/assets/ptjpl/conus/gridmet/landsat/c02",
-    "geesebal": "projects/openet/assets/geesebal/conus/gridmet/landsat/c02",
-    "ensemble": "projects/openet/assets/ensemble/conus/gridmet/landsat/c02",
-    "ssebop_nhm": "projects/usgs-gee-nhm-ssebop/assets/ssebop/landsat/c02",
+    "ssebop": f"{CACHED_ROOT}/ssebop",
+    "sims": f"{CACHED_ROOT}/sims",
+    "geesebal": f"{CACHED_ROOT}/geesebal",
+    "eemetric": f"{CACHED_ROOT}/eemetric",
+    "ensemble": f"{CACHED_ROOT}/ensemble",
 }
 
-# Reference ET for converting ET -> ETf (ptjpl, geesebal)
-REFET_COLLECTION = "projects/openet/assets/reference_et/conus/gridmet/daily/v1"
-
-# Models where the band is already ETf (et_fraction / 10000)
-DIRECT_ETF_MODELS = {"ssebop", "sims", "ssebop_nhm"}
-
-# Models where the band is ET (et / 1000) and must be divided by ETo
-ET_BAND_MODELS = {"ptjpl", "geesebal"}
-
-# Ensemble uses a different band name
-ENSEMBLE_MODELS = {"ensemble"}
+# Models not yet available at v2.1 — access pending
+_PENDING_MODELS = {"ptjpl", "disalexi"}
 
 
 def _get_etf_image(model, img_id, polygon):
-    """Compute an ETf ee.Image from a pre-computed OpenET asset scene.
+    """Load an ETf ee.Image from a cached asset scene.
+
+    All cached models have a single ``etf`` band in 0-2 range.
 
     Parameters
     ----------
@@ -71,7 +53,7 @@ def _get_etf_image(model, img_id, polygon):
     img_id : str
         Scene system:index within the collection.
     polygon : ee.Geometry
-        Geometry for clipping reference ET (used only for ET-band models).
+        Geometry (unused, kept for API compatibility).
 
     Returns
     -------
@@ -80,26 +62,7 @@ def _get_etf_image(model, img_id, polygon):
     """
     asset_path = ASSET_PATHS[model]
     full_id = f"{asset_path}/{img_id}"
-
-    if model in DIRECT_ETF_MODELS:
-        return ee.Image(full_id).select("et_fraction").divide(10000)
-
-    if model in ENSEMBLE_MODELS:
-        return ee.Image(full_id).select("et_ensemble_mad").divide(10000)
-
-    if model in ET_BAND_MODELS:
-        et_img = ee.Image(full_id).select("et").divide(1000)
-
-        # Get the scene date for reference ET lookup
-        scene_date = ee.Image(full_id).date()
-        date_str = scene_date.format("YYYYMMdd")
-        eto_img = (
-            ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto").divide(1000)
-        )
-
-        return et_img.divide(eto_img).clamp(0, 2)
-
-    raise ValueError(f"Unknown model: {model}")
+    return ee.Image(full_id).select("etf")
 
 
 def extract_etf_assets(
@@ -131,8 +94,7 @@ def extract_etf_assets(
     feature_id : str
         Column name for feature identifier.
     model : str
-        Model name: 'ssebop', 'ptjpl', 'sims', 'geesebal', 'ensemble',
-        or 'ssebop_nhm'.
+        Model name: 'ssebop', 'sims', 'geesebal', 'eemetric', or 'ensemble'.
     mask_type : str
         Irrigation masking: 'no_mask', 'irr', or 'inv_irr'.
     start_yr, end_yr : int
@@ -148,6 +110,14 @@ def extract_etf_assets(
     dest : str
         Export destination: 'drive' or 'bucket'.
     """
+    if model in _PENDING_MODELS:
+        warnings.warn(
+            f"Model '{model}' is not yet available at v2.1 — access pending. "
+            f"Available models: {sorted(ASSET_PATHS)}",
+            UserWarning,
+        )
+        return
+
     if model not in ASSET_PATHS:
         raise ValueError(f"Unknown model: {model}. Available: {list(ASSET_PATHS)}")
 

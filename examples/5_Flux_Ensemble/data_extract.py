@@ -134,7 +134,7 @@ def extract_openet_etf(
     Extract ETf zonal statistics using the open source OpenET software packages.
 
     This function uses the etf/ package modules to export per-scene ET fraction
-    zonal means for all 5 OpenET models: PT-JPL, SIMS, SSEBop, DisALEXI, and geeSEBAL.
+    zonal means for OpenET models: PT-JPL, SIMS, SSEBop, geeSEBAL, and eeMETRIC.
 
     Parameters
     ----------
@@ -144,7 +144,7 @@ def extract_openet_etf(
         List of site IDs to process. If None, processes all sites.
     models : list, optional
         List of model names to extract. Options: 'ptjpl', 'sims', 'ssebop',
-        'disalexi', 'geesebal'. If None, extracts all models.
+        'geesebal', 'eemetric'. If None, extracts all models.
     mask_types : list, optional
         List of irrigation mask types: 'no_mask', 'irr', 'inv_irr'.
         Default: ['irr', 'inv_irr'].
@@ -154,13 +154,16 @@ def extract_openet_etf(
     ee.Initialize()
 
     from swimrs.data_extraction.ee import (
+        export_etf,
         export_geesebal_zonal_stats,
         export_ptjpl_zonal_stats,
         export_sims_zonal_stats,
         export_ssebop_zonal_stats,
     )
 
-    # Map model names to export functions
+    # Map model names to export functions.
+    # ptjpl/ssebop/sims/geesebal use legacy per-model exporters;
+    # eemetric uses the unified export_etf dispatcher.
     model_exporters = {
         "ptjpl": export_ptjpl_zonal_stats,
         "sims": export_sims_zonal_stats,
@@ -168,8 +171,11 @@ def extract_openet_etf(
         "geesebal": export_geesebal_zonal_stats,
     }
 
+    # eemetric uses a different call signature via export_etf
+    _eemetric_models = {"eemetric"}
+
     if models is None:
-        models = list(model_exporters.keys())
+        models = list(model_exporters.keys()) + list(_eemetric_models)
 
     if mask_types is None:
         mask_types = ["irr", "inv_irr"]
@@ -180,31 +186,48 @@ def extract_openet_etf(
         print(f"{'#' * 60}")
 
         for model in models:
-            if model not in model_exporters:
-                print(f"Unknown model: {model}, skipping")
-                continue
-
-            export_fn = model_exporters[model]
             chk_dir = os.path.join(cfg.landsat_dir, "extracts", f"{model}_etf", mask_type)
 
             print(f"\n{'=' * 60}")
             print(f"Extracting {model.upper()} ETf zonal statistics ({mask_type})")
             print(f"{'=' * 60}")
 
-            export_fn(
-                shapefile=cfg.fields_shapefile,
-                bucket=cfg.ee_bucket,
-                feature_id=cfg.feature_id_col,
-                select=sites,
-                start_yr=cfg.start_dt.year,
-                end_yr=cfg.end_dt.year,
-                mask_type=mask_type,
-                check_dir=chk_dir,
-                state_col=cfg.state_col,
-                buffer=None,
-                batch_size=60,
-                file_prefix=cfg.project_name,
-            )
+            if model in _eemetric_models:
+                export_etf(
+                    shapefile=cfg.fields_shapefile,
+                    model=model,
+                    feature_id=cfg.feature_id_col,
+                    select=sites,
+                    start_yr=cfg.start_dt.year,
+                    end_yr=cfg.end_dt.year,
+                    mask_type=mask_type,
+                    check_dir=chk_dir,
+                    state_col=cfg.state_col,
+                    buffer=None,
+                    batch_size=60,
+                    dest="bucket",
+                    bucket=cfg.ee_bucket,
+                    file_prefix=cfg.project_name,
+                    source="foss",
+                )
+            elif model in model_exporters:
+                export_fn = model_exporters[model]
+                export_fn(
+                    shapefile=cfg.fields_shapefile,
+                    bucket=cfg.ee_bucket,
+                    feature_id=cfg.feature_id_col,
+                    select=sites,
+                    start_yr=cfg.start_dt.year,
+                    end_yr=cfg.end_dt.year,
+                    mask_type=mask_type,
+                    check_dir=chk_dir,
+                    state_col=cfg.state_col,
+                    buffer=None,
+                    batch_size=60,
+                    file_prefix=cfg.project_name,
+                )
+            else:
+                print(f"Unknown model: {model}, skipping")
 
 
 def extract_openet_etf_assets(
@@ -213,10 +236,11 @@ def extract_openet_etf_assets(
     models=None,
     mask_types=None,
 ) -> None:
-    """Extract ETf from pre-computed OpenET EE asset collections (fast).
+    """Extract ETf from user-owned cached EE asset collections.
 
-    Reads from official OpenET image collections on Earth Engine instead of
-    running the FOSS packages on-the-fly.
+    Uses the package-level ``export_etf(source="asset")`` to read from
+    cached ImageCollections at ``projects/ee-dgketchum/assets/openet_etf/{model}``.
+    No openet-* FOSS packages are required.
 
     Parameters
     ----------
@@ -225,18 +249,18 @@ def extract_openet_etf_assets(
     sites : list, optional
         List of site IDs to process. If None, processes all sites.
     models : list, optional
-        Model names: 'ptjpl', 'sims', 'ssebop', 'geesebal', 'ensemble'.
-        If None, extracts all 4 FOSS models.
+        Model names: 'ssebop', 'sims', 'geesebal', 'eemetric', 'ensemble'.
+        If None, extracts all 5 models.
     mask_types : list, optional
         Irrigation mask types: 'no_mask', 'irr', 'inv_irr'.
         Default: ['no_mask'].
     """
     is_authorized()
 
-    from etf_asset_extract import extract_etf_assets
+    from swimrs.data_extraction.ee import export_etf
 
     if models is None:
-        models = ["ptjpl", "sims", "ssebop", "geesebal"]
+        models = ["ssebop", "sims", "geesebal", "eemetric", "ensemble"]
 
     if mask_types is None:
         mask_types = ["no_mask"]
@@ -250,22 +274,24 @@ def extract_openet_etf_assets(
             chk_dir = os.path.join(cfg.landsat_dir, "extracts", "openet", f"{model}_etf", mask_type)
 
             print(f"\n{'=' * 60}")
-            print(f"Extracting {model.upper()} ETf from EE assets ({mask_type})")
+            print(f"Extracting {model.upper()} ETf from cached EE assets ({mask_type})")
             print(f"{'=' * 60}")
 
-            extract_etf_assets(
+            export_etf(
                 shapefile=cfg.fields_shapefile,
-                bucket=cfg.ee_bucket,
-                feature_id=cfg.feature_id_col,
                 model=model,
-                mask_type=mask_type,
+                feature_id=cfg.feature_id_col,
+                select=sites,
                 start_yr=cfg.start_dt.year,
                 end_yr=cfg.end_dt.year,
+                mask_type=mask_type,
                 check_dir=chk_dir,
                 state_col=cfg.state_col,
-                select=sites,
-                file_prefix=cfg.project_name,
+                clustered=False,
                 dest="bucket",
+                bucket=cfg.ee_bucket,
+                file_prefix=cfg.project_name,
+                source="asset",
             )
 
 
@@ -327,11 +353,11 @@ if __name__ == "__main__":
     # extract_ndvi(config, select_sites, get_sentinel=True)
     # extract_gridmet(config, select_sites)
 
-    # Fast: extract from pre-computed OpenET EE asset collections
+    # Fast: extract from pre-computed OpenET v2.1 EE asset collections
     extract_openet_etf_assets(
         config,
         sites=select_sites,
-        models=["ptjpl", "sims", "ssebop", "geesebal"],
+        models=["ssebop", "sims", "geesebal", "eemetric", "ensemble"],
         mask_types=["no_mask"],
     )
 
@@ -339,6 +365,6 @@ if __name__ == "__main__":
     # extract_openet_etf(
     #     config,
     #     sites=select_sites,
-    #     models=["ptjpl", "sims", "ssebop", "geesebal"],
+    #     models=["ptjpl", "sims", "ssebop", "geesebal", "eemetric"],
     #     mask_types=["irr"],
     # )
