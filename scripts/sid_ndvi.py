@@ -116,52 +116,79 @@ def extract_ndvi(
     return None
 
 
+def _chunk_list(lst, n):
+    """Split list into n roughly equal chunks."""
+    k, m = divmod(len(lst), n)
+    return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
+
+
+CHUNK_SUFFIXES = "abcdefghijklmnopqrstuvwxyz"
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="SID NDVI extraction")
+    parser.add_argument("--counties", type=str, default=None, help="Comma-separated county numbers")
+    parser.add_argument("--chunks", type=int, default=1, help="Split each county into N groups")
+    parser.add_argument("--start-yr", type=int, default=1991)
+    parser.add_argument("--end-yr", type=int, default=2023)
+    parser.add_argument("--dest", choices=["bucket", "local"], default="bucket")
+    parser.add_argument("--bucket", type=str, default="wudr")
+    args = parser.parse_args()
+
     root = "/data/ssd2/swim/sid"
     os.makedirs(root, exist_ok=True)
     sys.setrecursionlimit(5000)
 
     is_authorized("ee-hoylman")
 
-    beg_year = 2024
-    end_year = 2025
-
-    dest = "bucket"
-    bucket = "wudr"
-
     gdf = gpd.read_file(SHAPEFILE)
     county_fids = gdf.groupby("COUNTY_NO")[FEATURE_ID].apply(list).to_dict()
+
+    if args.counties:
+        selected = {int(c.strip()) for c in args.counties.split(",")}
+        county_fids = {k: v for k, v in county_fids.items() if k in selected}
 
     for county_no, fids in county_fids.items():
         county = f"{county_no:03d}"
         name = gdf.loc[gdf["COUNTY_NO"] == county_no, "COUNTYNAME"].iloc[0]
 
-        for mask_type in ["irr", "inv_irr"]:
-            print(f"\n=== County {county} ({name}, {len(fids)} fields) mask={mask_type} ===")
+        if args.chunks > 1:
+            chunks = _chunk_list(fids, args.chunks)
+        else:
+            chunks = [fids]
 
-            fc = shapefile_to_feature_collection(SHAPEFILE, FEATURE_ID, select=fids)
+        for ci, chunk_fids in enumerate(chunks):
+            suffix = CHUNK_SUFFIXES[ci] if len(chunks) > 1 else ""
+            label = f"{county}{suffix}"
 
-            start_time = time.time()
-            result = extract_ndvi(
-                fc,
-                mask_type=mask_type,
-                start_yr=beg_year,
-                end_yr=end_year,
-                feature_id=FEATURE_ID,
-                dest=dest,
-                bucket=bucket,
-                file_prefix=f"sid/{county}",
-            )
-            elapsed = time.time() - start_time
+            for mask_type in ["irr", "inv_irr"]:
+                print(f"\n=== {label} ({name}, {len(chunk_fids)} fields) mask={mask_type} ===")
 
-            if result is not None:
-                out_csv = os.path.join(root, f"{county}_ndvi_{mask_type}.csv")
-                result.to_csv(out_csv)
-                print(
-                    f"  {result.shape[0]} fields x {result.shape[1]} scenes "
-                    f"in {elapsed:.1f}s -> {out_csv}"
+                fc = shapefile_to_feature_collection(SHAPEFILE, FEATURE_ID, select=chunk_fids)
+
+                start_time = time.time()
+                result = extract_ndvi(
+                    fc,
+                    mask_type=mask_type,
+                    start_yr=args.start_yr,
+                    end_yr=args.end_yr,
+                    feature_id=FEATURE_ID,
+                    dest=args.dest,
+                    bucket=args.bucket,
+                    file_prefix=f"sid/{label}",
                 )
-            else:
-                print(f"  Export tasks submitted in {elapsed:.1f}s")
+                elapsed = time.time() - start_time
+
+                if result is not None:
+                    out_csv = os.path.join(root, f"{label}_ndvi_{mask_type}.csv")
+                    result.to_csv(out_csv)
+                    print(
+                        f"  {result.shape[0]} fields x {result.shape[1]} scenes "
+                        f"in {elapsed:.1f}s -> {out_csv}"
+                    )
+                else:
+                    print(f"  Export tasks submitted in {elapsed:.1f}s")
 
 # ========================= EOF ====================================================================

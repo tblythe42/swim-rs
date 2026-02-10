@@ -82,10 +82,26 @@ def extract_irrigation(
                 time.sleep(WAIT_MINUTES * 60)
 
 
+def _chunk_list(lst, n):
+    """Split list into n roughly equal chunks."""
+    k, m = divmod(len(lst), n)
+    return [lst[i * k + min(i, m) : (i + 1) * k + min(i + 1, m)] for i in range(n)]
+
+
+CHUNK_SUFFIXES = "abcdefghijklmnopqrstuvwxyz"
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="SID IrrMapper extraction")
+    parser.add_argument("--counties", type=str, default=None, help="Comma-separated county numbers")
+    parser.add_argument("--chunks", type=int, default=1, help="Split each county into N groups")
+    args = parser.parse_args()
+
     sys.setrecursionlimit(5000)
 
-    is_authorized("ee-dgketchum")
+    is_authorized("ee-hoylman")
 
     dest = "bucket"
     bucket = "wudr"
@@ -93,23 +109,36 @@ if __name__ == "__main__":
     gdf = gpd.read_file(SHAPEFILE)
     county_fids = gdf.groupby("COUNTY_NO")[FEATURE_ID].apply(list).to_dict()
 
+    if args.counties:
+        selected = {int(c.strip()) for c in args.counties.split(",")}
+        county_fids = {k: v for k, v in county_fids.items() if k in selected}
+
     for county_no, fids in county_fids.items():
         county = f"{county_no:03d}"
         name = gdf.loc[gdf["COUNTY_NO"] == county_no, "COUNTYNAME"].iloc[0]
 
-        print(f"\n=== County {county} ({name}, {len(fids)} fields) ===")
+        if args.chunks > 1:
+            chunks = _chunk_list(fids, args.chunks)
+        else:
+            chunks = [fids]
 
-        fc = shapefile_to_feature_collection(SHAPEFILE, FEATURE_ID, select=fids)
+        for ci, chunk_fids in enumerate(chunks):
+            suffix = CHUNK_SUFFIXES[ci] if len(chunks) > 1 else ""
+            label = f"{county}{suffix}"
 
-        start_time = time.time()
-        extract_irrigation(
-            fc,
-            feature_id=FEATURE_ID,
-            dest=dest,
-            bucket=bucket,
-            file_prefix=f"sid/{county}",
-        )
-        elapsed = time.time() - start_time
-        print(f"  Export task submitted in {elapsed:.1f}s")
+            print(f"\n=== {label} ({name}, {len(chunk_fids)} fields) ===")
+
+            fc = shapefile_to_feature_collection(SHAPEFILE, FEATURE_ID, select=chunk_fids)
+
+            start_time = time.time()
+            extract_irrigation(
+                fc,
+                feature_id=FEATURE_ID,
+                dest=dest,
+                bucket=bucket,
+                file_prefix=f"sid/{label}",
+            )
+            elapsed = time.time() - start_time
+            print(f"  Export task submitted in {elapsed:.1f}s")
 
 # ========================= EOF ====================================================================
