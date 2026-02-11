@@ -81,7 +81,7 @@ def clustered_landsat_time_series_nc(
     dt_index = pd.date_range(f"{start_yr}-01-01", f"{end_yr}-12-31", freq="D")
 
     field = image_df
-    cols = [c for c in field.columns if len(c.split("_")) == 3]
+    cols = [c for c in field.columns if re.match(r"\d{8}$", c.split("_")[-1])]
     f_idx = [c.split("_")[-1] for c in cols]
     f_idx = [pd.to_datetime(i) for i in f_idx]
     field = pd.DataFrame(columns=field.index, data=field[cols].values.T, index=f_idx)
@@ -264,18 +264,44 @@ def process_county(data_dir, out_file, do_inv_irr=True):
 
 
 if __name__ == "__main__":
-    root = "/nas/swim/sid"
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build SID NDVI netCDFs from local CSVs")
+    parser.add_argument(
+        "--counties",
+        type=str,
+        default=None,
+        help="Comma-separated county codes to process (e.g., '001,073a,081a'). Default: all.",
+    )
+    parser.add_argument(
+        "--root",
+        type=str,
+        default="/nas/swim/sid",
+        help="Root directory containing county subdirectories.",
+    )
+    args = parser.parse_args()
+
+    root = args.root
 
     # Auto-discover county directories (numeric subdirectories)
-    counties = sorted(
+    all_counties = sorted(
         [
             d
             for d in os.listdir(root)
-            if os.path.isdir(os.path.join(root, d)) and re.match(r"\d{3}[ab]?$", d)
+            if os.path.isdir(os.path.join(root, d)) and re.match(r"\d{3}[a-d]?$", d)
         ]
     )
 
-    print(f"Found {len(counties)} county directories")
+    if args.counties:
+        selected = {c.strip() for c in args.counties.split(",")}
+        counties = [c for c in all_counties if c in selected]
+        missing = selected - set(counties)
+        if missing:
+            print(f"Warning: requested counties not found: {missing}")
+    else:
+        counties = all_counties
+
+    print(f"Processing {len(counties)} of {len(all_counties)} county directories")
 
     for county in tqdm(counties, total=len(counties)):
         county_dir = os.path.join(root, county)
