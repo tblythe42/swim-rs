@@ -36,14 +36,14 @@ OPENET_SOURCES = {
 
 DEST_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
 
-# Reference ET for converting ET -> ETf (geesebal)
+# Reference ET for converting ET -> ETf (geesebal, disalexi, ptjpl)
 REFET_COLLECTION = "projects/openet/assets/reference_et/conus/gridmet/daily/v1"
 
 # Models where the band is already ETf (et_fraction / 10000)
-DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric", "ptjpl"}
+DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric"}
 
-# Models where the band is ET (et / 1000) and must be divided by ETo
-ET_BAND_MODELS = {"geesebal", "disalexi"}
+# Models where the band is ET (et / 1000) and must be divided by ETo (mm, not scaled)
+ET_BAND_MODELS = {"geesebal", "disalexi", "ptjpl"}
 
 # Ensemble model: et_ensemble_mad / 10000
 ENSEMBLE_MODELS = {"ensemble"}
@@ -121,9 +121,7 @@ def _normalize_etf(model, image, geometry):
         et_img = image.select("et").divide(1000)
         scene_date = image.date()
         date_str = scene_date.format("YYYYMMdd")
-        eto_img = (
-            ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto").divide(1000)
-        )
+        eto_img = ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto")
         return et_img.divide(eto_img).clamp(0, 2).rename("etf")
 
     raise ValueError(f"Unknown model: {model}")
