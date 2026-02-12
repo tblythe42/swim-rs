@@ -1,0 +1,4 @@
+county,mask_type,missing_year,infill_source_year,reason
+081c,irr,1991,1992,EE toBands 5000-band limit; irr_min_yr_mask asset did not resolve
+081c,inv_irr,2005,2006,EE toBands 5000-band limit; irr_min_yr_mask asset did not resolve
+081c,inv_irr,2012,2013,EE toBands 5000-band limit; irr_min_yr_mask asset did not resolve

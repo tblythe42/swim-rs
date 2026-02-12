@@ -10,6 +10,7 @@ from glob import glob
 import numpy as np
 import pandas as pd
 import xarray
+from scipy.ndimage import uniform_filter1d
 from tqdm import tqdm
 
 FEATURE_ID = "FID"
@@ -197,6 +198,94 @@ def detect_cuttings_nc(landsat, irr_ds, irr_threshold=0.1):
     return irr_days
 
 
+def detect_cuttings_vectorized(landsat, irr_ds, irr_threshold=0.1):
+    """Vectorized replacement for detect_cuttings_nc.
+
+    Replaces the triple-nested (field x year x group) Python loop with
+    numpy/scipy array operations.  The per-field inner loop uses only
+    numpy bincount + array slicing — no DataFrame allocation, no .isin().
+    """
+    dates = pd.to_datetime(landsat.date.values)
+    fids = landsat.FID.values
+    n_fields = len(fids)
+
+    ndvi_all = landsat["ndvi_irr"].values  # (n_dates, n_fields)
+
+    irr_prob = irr_ds["irr"].values  # (n_fid, n_year)
+    irr_years = irr_ds["year"].values
+    irr_fid_idx = {v: i for i, v in enumerate(irr_ds["fid"].values)}
+
+    result = np.zeros((len(dates), n_fields), dtype=bool)
+
+    for yr in sorted(set(dates.year)):
+        if yr not in irr_years:
+            continue
+        yr_col = np.searchsorted(irr_years, yr)
+
+        yr_idx = np.where(dates.year == yr)[0]
+        n_yr = len(yr_idx)
+        if n_yr == 0:
+            continue
+
+        ndvi_yr = ndvi_all[yr_idx, :]
+
+        # 10-day centered rolling mean; NaN edges to match pandas rolling(10, center=True)
+        smooth = uniform_filter1d(ndvi_yr, size=10, axis=0, mode="nearest")
+        smooth[:4, :] = np.nan
+        smooth[-5:, :] = np.nan
+
+        diff = np.empty_like(smooth)
+        diff[0, :] = np.nan
+        diff[1:, :] = smooth[1:, :] - smooth[:-1, :]
+
+        prev_diff = np.empty_like(diff)
+        prev_diff[0, :] = np.nan
+        prev_diff[1:, :] = diff[:-1, :]
+
+        pos = np.nan_to_num(diff, nan=0.0) > 0
+        local_min = (np.nan_to_num(diff, nan=0.0) > 0) & (np.nan_to_num(prev_diff, nan=0.0) < 0)
+
+        for fi, fid in enumerate(fids):
+            if fid not in irr_fid_idx:
+                continue
+            if irr_prob[irr_fid_idx[fid], yr_col] <= irr_threshold:
+                continue
+
+            col_pos = pos[:, fi]
+            if not col_pos.any():
+                continue
+
+            sign_change = np.diff(col_pos.astype(np.int8), prepend=0)
+            groups = np.cumsum(np.abs(sign_change))
+
+            counts = np.bincount(groups[col_pos], minlength=groups.max() + 1)
+            long_groups = np.where(counts >= 10)[0]
+
+            for g in long_groups:
+                idxs = np.where((groups == g) & col_pos)[0]
+                if len(idxs) == 0:
+                    continue
+                start, end = idxs[0], idxs[-1]
+
+                start_global = yr_idx[start]
+                end_global = yr_idx[end]
+
+                if local_min[start, fi]:
+                    s = max(0, start_global - 5)
+                    e = max(0, end_global - 5)
+                else:
+                    s = start_global
+                    e = max(0, end_global - 5)
+
+                if e >= s:
+                    result[s : e + 1, fi] = True
+
+    return xarray.Dataset(
+        {"irr_days": (["date", "FID"], result)},
+        coords={"date": dates, "FID": fids},
+    )
+
+
 def process_county(data_dir, out_file, do_inv_irr=True):
     """Process a county's NDVI and IrrMapper CSVs into a netCDF file.
 
@@ -247,8 +336,8 @@ def process_county(data_dir, out_file, do_inv_irr=True):
         irr_files = glob(irr_pattern)
         if irr_files:
             irr_ds = read_irr_csv(irr_files[0], feature_id=FEATURE_ID)
-            print("  Running detect_cuttings")
-            irr_days = detect_cuttings_nc(ndvi_irr, irr_ds, irr_threshold=0.1)
+            print("  Running detect_cuttings (vectorized)")
+            irr_days = detect_cuttings_vectorized(ndvi_irr, irr_ds, irr_threshold=0.1)
             rs_xrs.append(irr_days)
         else:
             print(f"  No IrrMapper CSV found at {irr_pattern}, skipping detect_cuttings")

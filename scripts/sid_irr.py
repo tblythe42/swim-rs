@@ -97,11 +97,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SID IrrMapper extraction")
     parser.add_argument("--counties", type=str, default=None, help="Comma-separated county numbers")
     parser.add_argument("--chunks", type=int, default=1, help="Split each county into N groups")
+    parser.add_argument("--project", type=str, default="ee-dgketchum", help="EE project ID")
     args = parser.parse_args()
 
     sys.setrecursionlimit(5000)
 
-    is_authorized("ee-hoylman")
+    is_authorized(args.project)
 
     dest = "bucket"
     bucket = "wudr"
