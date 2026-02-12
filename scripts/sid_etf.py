@@ -70,7 +70,7 @@ def _normalize_etf(model, image):
     else:
         raise ValueError(f"Unknown model: {model}")
 
-    return etf.copyProperties(image, ["system:time_start", "system:index"])
+    return ee.Image(etf.copyProperties(image, ["system:time_start", "system:index"]))
 
 
 def extract_etf(
