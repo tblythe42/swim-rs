@@ -18,7 +18,8 @@ import time
 
 import ee
 import geopandas as gpd
-from pyproj import CRS
+import shapely.ops
+from pyproj import CRS, Transformer
 from shapely.ops import unary_union
 from tqdm import tqdm
 
@@ -39,10 +40,10 @@ DEST_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
 REFET_COLLECTION = "projects/openet/assets/reference_et/conus/gridmet/daily/v1"
 
 # Models where the band is already ETf (et_fraction / 10000)
-DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric", "ptjpl", "disalexi"}
+DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric", "ptjpl"}
 
 # Models where the band is ET (et / 1000) and must be divided by ETo
-ET_BAND_MODELS = {"geesebal"}
+ET_BAND_MODELS = {"geesebal", "disalexi"}
 
 # Ensemble model: et_ensemble_mad / 10000
 ENSEMBLE_MODELS = {"ensemble"}
@@ -67,7 +68,7 @@ def _build_union_geometry(shapefile, feature_id, buffer_m=4000, select=None):
     ee.Geometry
         Union of all buffered site geometries in EPSG:4326.
     """
-    gdf = gpd.read_file(shapefile)
+    gdf = gpd.read_file(shapefile, engine="fiona")
     gdf = gdf.set_index(feature_id)
 
     if select is not None:
@@ -85,10 +86,10 @@ def _build_union_geometry(shapefile, feature_id, buffer_m=4000, select=None):
     buffered = gdf_proj.buffer(buffer_m)
     union_geom = unary_union(buffered)
 
-    # Back to 4326 for EE
-    gdf_union = gpd.GeoDataFrame(geometry=[union_geom], crs=gdf_proj.crs)
-    gdf_union = gdf_union.to_crs(epsg=4326)
-    union_4326 = gdf_union.geometry.iloc[0]
+    # Back to 4326 for EE — use pyproj directly to avoid geopandas/shapely compat issues
+    proj_crs = gdf_proj.crs if gdf_proj.crs is not None else CRS.from_epsg(5070)
+    transformer = Transformer.from_crs(proj_crs, CRS.from_epsg(4326), always_xy=True)
+    union_4326 = shapely.ops.transform(transformer.transform, union_geom)
 
     return ee.Geometry(union_4326.__geo_interface__)
 
@@ -147,11 +148,22 @@ def _ensure_asset_exists(asset_id, asset_type):
 
 def _list_existing_images(collection_path):
     """Return set of image IDs already in the destination collection."""
+    all_ids = set()
     try:
-        assets = ee.data.listAssets({"parent": collection_path})
-        return {a["id"].split("/")[-1] for a in assets.get("assets", [])}
+        page_token = None
+        while True:
+            params = {"parent": collection_path, "pageSize": 1000}
+            if page_token:
+                params["pageToken"] = page_token
+            result = ee.data.listAssets(params)
+            for a in result.get("assets", []):
+                all_ids.add(a["id"].split("/")[-1])
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
     except ee.ee_exception.EEException:
         return set()
+    return all_ids
 
 
 def _get_pending_task_descriptions():
