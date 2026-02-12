@@ -18,9 +18,10 @@ MAX_RETRIES = 6
 IRR = "projects/ee-dgketchum/assets/IrrMapper/IrrMapperComp"
 IRR_MIN_YR_ASSET = "projects/ee-dgketchum/assets/SID/irr_min_yr_mask"
 FEATURE_ID = "FID"
-SHAPEFILE = (
-    "/nas/Montana/statewide_irrigation_dataset/statewide_irrigation_dataset_15FEB2024_aea.shp"
-)
+_SHP_NAME = "statewide_irrigation_dataset/statewide_irrigation_dataset_15FEB2024_aea.shp"
+_SHP_PRIMARY = f"/nas/Montana/{_SHP_NAME}"
+_SHP_FALLBACK = f"/home/dgketchum/data/IrrigationGIS/Montana/{_SHP_NAME}"
+SHAPEFILE = _SHP_PRIMARY if os.path.exists(_SHP_PRIMARY) else _SHP_FALLBACK
 
 # OpenET v2.1 source collections
 OPENET_SOURCES = {
@@ -33,14 +34,14 @@ OPENET_SOURCES = {
     "disalexi": "projects/openet/assets/disalexi/conus/cfsr/landsat/v2_1",
 }
 
-# Reference ET for converting ET -> ETf (geesebal, disalexi)
+# Reference ET for converting ET -> ETf (geesebal, disalexi, ptjpl)
 REFET_COLLECTION = "projects/openet/assets/reference_et/conus/gridmet/daily/v1"
 
 # Models where the band is already ETf (et_fraction / 10000)
-DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric", "ptjpl"}
+DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric"}
 
-# Models where the band is ET (et / 1000) and must be divided by ETo
-ET_BAND_MODELS = {"geesebal", "disalexi"}
+# Models where the band is ET (et / 1000) and must be divided by ETo (mm, not scaled)
+ET_BAND_MODELS = {"geesebal", "disalexi", "ptjpl"}
 
 # Ensemble model: et_ensemble_mad / 10000
 ENSEMBLE_MODELS = {"ensemble"}
@@ -63,9 +64,7 @@ def _normalize_etf(model, image):
         et_img = image.select("et").divide(1000)
         scene_date = image.date()
         date_str = scene_date.format("YYYYMMdd")
-        eto_img = (
-            ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto").divide(1000)
-        )
+        eto_img = ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto")
         etf = et_img.divide(eto_img).clamp(0, 2).rename("etf")
     else:
         raise ValueError(f"Unknown model: {model}")
@@ -125,7 +124,11 @@ def extract_etf(
         )
         irr_mask = irr_min_yr_mask.updateMask(irr.lt(1))
 
-        coll = ee.ImageCollection(src_path).filterDate(f"{year}-01-01", f"{year}-12-31")
+        coll = (
+            ee.ImageCollection(src_path)
+            .filterDate(f"{year}-01-01", f"{year}-12-31")
+            .filterBounds(feature_coll.geometry())
+        )
 
         # Normalize ETf per image and apply mask
         if mask_type == "irr":
