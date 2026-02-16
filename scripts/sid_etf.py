@@ -18,10 +18,9 @@ MAX_RETRIES = 6
 IRR = "projects/ee-dgketchum/assets/IrrMapper/IrrMapperComp"
 IRR_MIN_YR_ASSET = "projects/ee-dgketchum/assets/SID/irr_min_yr_mask"
 FEATURE_ID = "FID"
-_SHP_NAME = "statewide_irrigation_dataset/statewide_irrigation_dataset_15FEB2024_aea.shp"
-_SHP_PRIMARY = f"/nas/Montana/{_SHP_NAME}"
-_SHP_FALLBACK = f"/home/dgketchum/data/IrrigationGIS/Montana/{_SHP_NAME}"
-SHAPEFILE = _SHP_PRIMARY if os.path.exists(_SHP_PRIMARY) else _SHP_FALLBACK
+SHAPEFILE = (
+    "/nas/Montana/statewide_irrigation_dataset/statewide_irrigation_dataset_15FEB2024_aea.shp"
+)
 
 # OpenET v2.1 source collections
 OPENET_SOURCES = {
