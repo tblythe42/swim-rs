@@ -359,8 +359,27 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
             for k in ["r2", "r", "rmse", "bias"]:
                 row[f"{k}_{model_name}"] = m[k]
 
-        # Open-source ensemble (nanmean of interpolated models)
-        if model_et_on_common:
+        # Open-source ensemble: pre-computed OpenET or nanmean of individual models
+        ensemble_source = getattr(cfg, "ensemble_source", "computed")
+        if ensemble_source == "openet":
+            # Load pre-computed ensemble ETf from container
+            ens_etf = None
+            for mask in ["no_mask", "inv_irr", "irr"]:
+                ens_path = f"remote_sensing/etf/landsat/ensemble/{mask}"
+                try:
+                    ens_df = container.query.dataframe(ens_path, fields=[fid])
+                    if fid in ens_df.columns and ens_df[fid].notna().any():
+                        ens_etf = ens_df[fid]
+                        break
+                except Exception:
+                    pass
+            if ens_etf is not None:
+                ens_et_daily = ens_etf.interpolate(method="linear") * etref
+                ens_on_common = ens_et_daily.reindex(common)
+                m = calc_metrics(obs, ens_on_common.values)
+            else:
+                m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+        elif model_et_on_common:
             stack = np.column_stack(list(model_et_on_common.values()))
             ensemble_et = np.nanmean(stack, axis=1)
             m = calc_metrics(obs, ensemble_et)

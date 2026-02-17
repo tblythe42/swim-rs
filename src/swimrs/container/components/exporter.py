@@ -339,6 +339,7 @@ class Exporter(Component):
         fields: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        ensemble_source: str | None = None,
     ) -> ProvenanceEvent:
         """
         Export observation files for model calibration.
@@ -384,33 +385,47 @@ class Exporter(Component):
             # Load ETf data for masks (optionally ensemble mean across models)
             etf_data = {}
             if etf_model == "ensemble":
-                import xarray as xr
-
-                etf_prefix = "remote_sensing/etf/landsat"
-                model_names: list[str] = []
-                if etf_prefix in self._state.root:
-                    try:
-                        model_names = sorted(self._state.root[etf_prefix].keys())
-                    except Exception:
-                        model_names = []
-
-                for mask in masks:
-                    model_arrays = []
-                    for model_name in model_names:
-                        etf_path = f"{etf_prefix}/{model_name}/{mask}"
-                        if etf_path not in self._state.root:
-                            continue
-                        model_arrays.append(
-                            self._state.get_xarray(
+                _ens_source = ensemble_source or "computed"
+                if _ens_source == "openet":
+                    # Use OpenET's pre-computed ensemble directly
+                    for mask in masks:
+                        etf_path = f"remote_sensing/etf/landsat/ensemble/{mask}"
+                        if etf_path in self._state.root:
+                            etf_data[mask] = self._state.get_xarray(
                                 etf_path,
                                 fields=target_fields,
                                 start_date=start_date,
                                 end_date=end_date,
                             )
-                        )
-                    if model_arrays:
-                        stacked = xr.concat(model_arrays, dim="model")
-                        etf_data[mask] = stacked.mean(dim="model")
+                else:
+                    # Compute mean across all individual models (DIY)
+                    import xarray as xr
+
+                    etf_prefix = "remote_sensing/etf/landsat"
+                    model_names: list[str] = []
+                    if etf_prefix in self._state.root:
+                        try:
+                            model_names = sorted(self._state.root[etf_prefix].keys())
+                        except Exception:
+                            model_names = []
+
+                    for mask in masks:
+                        model_arrays = []
+                        for model_name in model_names:
+                            etf_path = f"{etf_prefix}/{model_name}/{mask}"
+                            if etf_path not in self._state.root:
+                                continue
+                            model_arrays.append(
+                                self._state.get_xarray(
+                                    etf_path,
+                                    fields=target_fields,
+                                    start_date=start_date,
+                                    end_date=end_date,
+                                )
+                            )
+                        if model_arrays:
+                            stacked = xr.concat(model_arrays, dim="model")
+                            etf_data[mask] = stacked.mean(dim="model")
             else:
                 for mask in masks:
                     etf_path = f"remote_sensing/etf/landsat/{etf_model}/{mask}"

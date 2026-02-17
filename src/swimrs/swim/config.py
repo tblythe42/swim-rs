@@ -86,6 +86,7 @@ class ProjectConfig:
         # Calibration / Forecast
         self.pest_run_dir = None
         self.etf_target_model = None
+        self.ensemble_source = "computed"
         self.etf_ensemble_members = None
         self.workers = None
         self.realizations = None
@@ -320,6 +321,11 @@ class ProjectConfig:
         # Calibration
         self.pest_run_dir = calib_toml_conf.get("pest_run_dir")
         self.etf_target_model = calib_toml_conf.get("etf_target_model")
+        self.ensemble_source = calib_toml_conf.get("ensemble_source", "computed")
+        if self.ensemble_source not in ("computed", "openet"):
+            raise ValueError(
+                f"Invalid ensemble_source={self.ensemble_source!r}. Must be 'computed' or 'openet'."
+            )
         self.etf_ensemble_members = calib_toml_conf.get("etf_ensemble_members")
         self.workers = calib_toml_conf.get("workers")
         self.realizations = calib_toml_conf.get("realizations")

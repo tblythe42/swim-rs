@@ -192,24 +192,33 @@ class PestBuilder:
         )
 
         if model == "ensemble":
-            # Find all available ETf models in the container
-            available_models = self._discover_etf_models()
-            if not available_models:
-                return result
-
-            for mask in ["irr", "inv_irr"]:
-                mask_data = []
-                for m in available_models:
-                    path = f"remote_sensing/etf/landsat/{m}/{mask}"
+            ensemble_source = getattr(self.config, "ensemble_source", "computed")
+            if ensemble_source == "openet":
+                # Use OpenET's pre-computed ensemble directly from the container
+                for mask in ["irr", "inv_irr"]:
+                    path = f"remote_sensing/etf/landsat/ensemble/{mask}"
                     if path in self._container.state.root:
                         df = self._container.query.dataframe(path, fields=[fid])
                         if fid in df.columns:
-                            mask_data.append(df[fid])
+                            result[f"ensemble_etf_{mask}"] = df[fid]
+            else:
+                # Compute ensemble mean from individual models (DIY)
+                available_models = self._discover_etf_models()
+                if not available_models:
+                    return result
 
-                if mask_data:
-                    # Compute mean across all models
-                    combined = pd.concat(mask_data, axis=1)
-                    result[f"ensemble_etf_{mask}"] = combined.mean(axis=1)
+                for mask in ["irr", "inv_irr"]:
+                    mask_data = []
+                    for m in available_models:
+                        path = f"remote_sensing/etf/landsat/{m}/{mask}"
+                        if path in self._container.state.root:
+                            df = self._container.query.dataframe(path, fields=[fid])
+                            if fid in df.columns:
+                                mask_data.append(df[fid])
+
+                    if mask_data:
+                        combined = pd.concat(mask_data, axis=1)
+                        result[f"ensemble_etf_{mask}"] = combined.mean(axis=1)
         else:
             for mask in ["irr", "inv_irr"]:
                 path = f"remote_sensing/etf/landsat/{model}/{mask}"
@@ -505,6 +514,8 @@ class PestBuilder:
             self.config.end_dt.date().isoformat() if getattr(self.config, "end_dt", None) else None
         )
 
+        ensemble_source = getattr(self.config, "ensemble_source", "computed")
+
         try:
             self._container.export.observations(
                 output_dir=obs_dir,
@@ -514,6 +525,7 @@ class PestBuilder:
                 fields=fields,
                 start_date=start_date,
                 end_date=end_date,
+                ensemble_source=ensemble_source,
             )
         except Exception as e:
             raise RuntimeError(f"Failed to export observations to {obs_dir}: {e}") from e

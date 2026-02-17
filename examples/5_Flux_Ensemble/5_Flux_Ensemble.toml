@@ -61,7 +61,8 @@ cover_proxy = "ndvi"
 [calibration]
 pest_run_dir = "{project_workspace}/pestrun"
 etf_target_model = "ensemble"
-etf_ensemble_members = ["ssebop", "sims", "geesebal", "eemetric"]
+ensemble_source = "computed"  # "computed" = DIY mean of members, "openet" = pre-computed OpenET ensemble
+etf_ensemble_members = ["ssebop", "sims", "geesebal", "eemetric", "ptjpl", "disalexi"]
 workers = 40
 realizations = 200
 calibration_dir = "{pest_run_dir}/pest/mult"
