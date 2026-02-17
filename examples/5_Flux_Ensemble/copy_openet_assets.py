@@ -1,26 +1,23 @@
-"""Copy OpenET ETf images to user-owned EE ImageCollections.
+"""Copy OpenET images to GCS as deduplicated GeoTIFF chips.
 
-Reads from an OpenET v2.1 source collection, applies per-model band/scaling to
-produce uniform ETf (single ``etf`` band, float, 0-2 range), clips to 4km buffers
-around all sites, and exports to
-``projects/ee-dgketchum/assets/openet_etf/v2_1/{model}``.
-
-This creates a cached copy so that downstream extraction does not depend on
-continued access to the official OpenET asset paths.
+Discovers scenes overlapping each site, deduplicates by scene ID (so scenes
+covering multiple co-located sites are exported only once), clips to the union
+of overlapping sites' 4km buffers, and exports to
+``gs://{bucket}/openet/etf/{model}/{scene_id}.tif``.
 
 Usage:
-    python copy_openet_assets.py --shapefile <path> --model ssebop \\
-        [--source <collection>] [--start-yr 2016] [--end-yr 2024] \\
-        [--sites SITE1,SITE2] [--buffer 4000]
+    python copy_openet_assets.py --shapefile <path> --models ssebop \\
+        [--project ee-dgketchum] [--start-date 2016-01-01] [--end-date 2024-12-31] \\
+        [--sites SITE1,SITE2] [--buffer 4000] [--bucket wudr] [--single-test]
 """
 
+import subprocess
 import time
 
 import ee
 import geopandas as gpd
 import shapely.ops
 from pyproj import CRS, Transformer
-from shapely.ops import unary_union
 from tqdm import tqdm
 
 # OpenET v2.1 source collections
@@ -34,39 +31,19 @@ OPENET_SOURCES = {
     "disalexi": "projects/openet/assets/disalexi/conus/cfsr/landsat/v2_1",
 }
 
-DEST_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
-
-# Reference ET for converting ET -> ETf (geesebal, disalexi, ptjpl)
-REFET_COLLECTION = "projects/openet/assets/reference_et/conus/gridmet/daily/v1"
-
-# Models where the band is already ETf (et_fraction / 10000)
-DIRECT_ETF_MODELS = {"ssebop", "sims", "eemetric"}
-
-# Models where the band is ET (et / 1000) and must be divided by ETo (mm, not scaled)
-ET_BAND_MODELS = {"geesebal", "disalexi", "ptjpl"}
-
-# Ensemble model: et_ensemble_mad / 10000
-ENSEMBLE_MODELS = {"ensemble"}
+DEFAULT_BUCKET = "wudr"
+GCS_PREFIX = "openet/etf"
 
 
-def _build_union_geometry(shapefile, feature_id, buffer_m=4000, select=None):
-    """Load shapefile, buffer each site by buffer_m, return dissolved union in EPSG:4326.
-
-    Parameters
-    ----------
-    shapefile : str
-        Path to polygon shapefile.
-    feature_id : str
-        Column name for feature identifier.
-    buffer_m : float
-        Buffer distance in meters around each site geometry.
-    select : list[str], optional
-        Subset of feature IDs to process.
+def _build_site_geometries(shapefile, feature_id, buffer_m=4000, select=None):
+    """Load shapefile, buffer each site, return shapely and EE geometry dicts.
 
     Returns
     -------
-    ee.Geometry
-        Union of all buffered site geometries in EPSG:4326.
+    shapely_geoms : dict[str, shapely.geometry.base.BaseGeometry]
+        Mapping of site_id to buffered shapely geometry in EPSG:4326.
+    ee_geoms : dict[str, ee.Geometry]
+        Mapping of site_id to the same buffered geometry as ee.Geometry.
     """
     gdf = gpd.read_file(shapefile, engine="fiona")
     gdf = gdf.set_index(feature_id)
@@ -77,91 +54,65 @@ def _build_union_geometry(shapefile, feature_id, buffer_m=4000, select=None):
     # Project to a meter-based CRS for buffering
     src_crs = gdf.crs
     if src_crs is None or src_crs.is_geographic:
-        # Use Conus Albers for buffering
         proj_crs = CRS.from_epsg(5070)
         gdf_proj = gdf.to_crs(proj_crs)
     else:
         gdf_proj = gdf
+        proj_crs = gdf_proj.crs
 
-    buffered = gdf_proj.buffer(buffer_m)
-    union_geom = unary_union(buffered)
-
-    # Back to 4326 for EE — use pyproj directly to avoid geopandas/shapely compat issues
-    proj_crs = gdf_proj.crs if gdf_proj.crs is not None else CRS.from_epsg(5070)
     transformer = Transformer.from_crs(proj_crs, CRS.from_epsg(4326), always_xy=True)
-    union_4326 = shapely.ops.transform(transformer.transform, union_geom)
 
-    return ee.Geometry(union_4326.__geo_interface__)
+    shapely_geoms = {}
+    ee_geoms = {}
+    for site_id, row in gdf_proj.iterrows():
+        buffered = row.geometry.buffer(buffer_m)
+        geom_4326 = shapely.ops.transform(transformer.transform, buffered)
+        shapely_geoms[site_id] = geom_4326
+        ee_geoms[site_id] = ee.Geometry(geom_4326.__geo_interface__)
+
+    return shapely_geoms, ee_geoms
 
 
-def _normalize_etf(model, image, geometry):
-    """Apply per-model band selection and scaling to produce uniform ETf.
-
-    Parameters
-    ----------
-    model : str
-        Model name.
-    image : ee.Image
-        Raw image from the source collection.
-    geometry : ee.Geometry
-        Clip geometry (for reference ET lookup).
+def _discover_scenes(src_path, start_date, end_date, ee_geoms):
+    """Query EE for scene IDs overlapping each site, return deduplicated mapping.
 
     Returns
     -------
-    ee.Image
-        Single-band ``etf`` image, float, clamped to 0-2.
+    scene_to_sites : dict[str, set[str]]
+        Mapping of scene_id to set of overlapping site_ids.
     """
-    if model in DIRECT_ETF_MODELS:
-        return image.select("et_fraction").divide(10000).clamp(0, 2).rename("etf")
+    scene_to_sites = {}
+    for site_id, site_geom in tqdm(ee_geoms.items(), desc="Discovering scenes"):
+        coll = ee.ImageCollection(src_path).filterDate(start_date, end_date).filterBounds(site_geom)
+        scene_hist = coll.aggregate_histogram("system:index").getInfo()
+        if not scene_hist:
+            continue
+        for scene_id in scene_hist:
+            scene_to_sites.setdefault(scene_id, set()).add(site_id)
 
-    if model in ENSEMBLE_MODELS:
-        return image.select("et_ensemble_mad").divide(10000).clamp(0, 2).rename("etf")
-
-    if model in ET_BAND_MODELS:
-        et_img = image.select("et").divide(1000)
-        scene_date = image.date()
-        date_str = scene_date.format("YYYYMMdd")
-        eto_img = ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto")
-        return et_img.divide(eto_img).clamp(0, 2).rename("etf")
-
-    raise ValueError(f"Unknown model: {model}")
+    return scene_to_sites
 
 
-def _ensure_asset_exists(asset_id, asset_type):
-    """Create an EE asset (folder or ImageCollection) if it doesn't exist.
-
-    Parameters
-    ----------
-    asset_id : str
-        Full asset path.
-    asset_type : str
-        One of 'FOLDER' or 'IMAGE_COLLECTION'.
-    """
+def _list_existing_tifs(bucket, prefix):
+    """Return set of filenames (without .tif) already in the GCS prefix."""
+    uri = f"gs://{bucket}/{prefix}/"
     try:
-        ee.data.getAsset(asset_id)
-    except ee.ee_exception.EEException:
-        print(f"Creating {asset_type}: {asset_id}")
-        ee.data.createAsset({"type": asset_type}, asset_id)
-
-
-def _list_existing_images(collection_path):
-    """Return set of image IDs already in the destination collection."""
-    all_ids = set()
-    try:
-        page_token = None
-        while True:
-            params = {"parent": collection_path, "pageSize": 1000}
-            if page_token:
-                params["pageToken"] = page_token
-            result = ee.data.listAssets(params)
-            for a in result.get("assets", []):
-                all_ids.add(a["id"].split("/")[-1])
-            page_token = result.get("nextPageToken")
-            if not page_token:
-                break
-    except ee.ee_exception.EEException:
+        result = subprocess.run(
+            ["gsutil", "ls", uri],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            return set()
+        names = set()
+        for line in result.stdout.strip().splitlines():
+            blob = line.rsplit("/", 1)[-1]
+            if blob.endswith(".tif"):
+                names.add(blob[:-4])
+        return names
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         return set()
-    return all_ids
 
 
 def _get_pending_task_descriptions():
@@ -179,24 +130,7 @@ def _get_pending_task_descriptions():
 
 
 def _start_export(task, desc, max_retries=6, wait_minutes=10):
-    """Start an EE export task, retrying on queue-full errors.
-
-    Parameters
-    ----------
-    task : ee.batch.Task
-        Export task to start.
-    desc : str
-        Task description (for logging).
-    max_retries : int
-        Maximum retries on queue-full.
-    wait_minutes : int
-        Minutes to wait between retries.
-
-    Returns
-    -------
-    bool
-        True if started, False if permanently failed.
-    """
+    """Start an EE export task, retrying on queue-full errors."""
     for attempt in range(max_retries + 1):
         try:
             task.start()
@@ -216,64 +150,73 @@ def _start_export(task, desc, max_retries=6, wait_minutes=10):
     return False
 
 
-def copy_openet_to_assets(
+def copy_openet_to_bucket(
     shapefile,
     model,
+    bucket=DEFAULT_BUCKET,
     source_collection=None,
-    dest_collection=None,
     feature_id="site_id",
     buffer_m=4000,
-    start_yr=2016,
-    end_yr=2024,
+    start_date="2016-01-01",
+    end_date="2024-12-31",
     select=None,
+    single_test=False,
 ):
-    """Copy OpenET images to a user-owned EE ImageCollection.
+    """Export clipped OpenET images to GCS as deduplicated GeoTIFFs.
 
-    Each image is normalized to a single ``etf`` band (float, 0-2 range),
-    clipped to the union of 4km-buffered site geometries, and exported
-    to the destination collection via ``Export.image.toAsset()``.
+    Discovers scenes overlapping each site, deduplicates by scene ID so
+    that a scene covering N co-located sites produces one export (not N),
+    clips to the union of overlapping sites' buffers, and exports via
+    ``Export.image.toCloudStorage()``.
 
     Parameters
     ----------
     shapefile : str
         Path to polygon shapefile with site geometries.
     model : str
-        Model name: 'ssebop', 'sims', 'geesebal', 'eemetric', or 'ensemble'.
+        Model name (key into OPENET_SOURCES).
+    bucket : str
+        GCS bucket name.
     source_collection : str, optional
-        Override source EE ImageCollection path. Defaults to OPENET_SOURCES[model].
-    dest_collection : str, optional
-        Override destination EE ImageCollection path.
-        Defaults to ``{DEST_ROOT}/{model}``.
+        Override source EE ImageCollection path.
     feature_id : str
         Column name for feature identifier.
     buffer_m : float
         Buffer distance in meters around each site.
-    start_yr, end_yr : int
-        Inclusive year range.
+    start_date, end_date : str
+        Date range (YYYY-MM-DD).
     select : list[str], optional
         Subset of feature IDs to process.
+    single_test : bool
+        If True, export one image and wait for completion to verify.
     """
     if model not in OPENET_SOURCES and source_collection is None:
         raise ValueError(f"Unknown model: {model}. Provide --source or use: {list(OPENET_SOURCES)}")
 
     src_path = source_collection or OPENET_SOURCES[model]
-    dst_path = dest_collection or f"{DEST_ROOT}/{model}"
+    gcs_prefix = f"{GCS_PREFIX}/{model}"
 
     print(f"Source: {src_path}")
-    print(f"Destination: {dst_path}")
+    print(f"Destination: gs://{bucket}/{gcs_prefix}/")
 
-    # Build union geometry from buffered sites
-    union_geom = _build_union_geometry(shapefile, feature_id, buffer_m, select)
-    print("Built union geometry from buffered sites")
+    # Build per-site buffered geometries (shapely for unions, EE for queries)
+    shapely_geoms, ee_geoms = _build_site_geometries(shapefile, feature_id, buffer_m, select)
+    print(f"Built {len(ee_geoms)} site geometries (buffer={buffer_m}m)")
 
-    # Ensure destination folder and collection exist
-    _ensure_asset_exists(DEST_ROOT, "FOLDER")
-    _ensure_asset_exists(dst_path, "IMAGE_COLLECTION")
+    # Phase 1: Discover all scenes and build scene → sites dedup mapping
+    scene_to_sites = _discover_scenes(src_path, start_date, end_date, ee_geoms)
 
-    # Check what's already copied to the destination collection
-    existing = _list_existing_images(dst_path)
+    per_site_total = sum(len(sites) for sites in scene_to_sites.values())
+    print(
+        f"Found {len(scene_to_sites)} unique scenes "
+        f"(was {per_site_total} per-site exports, "
+        f"{per_site_total / max(len(scene_to_sites), 1):.1f}x dedup ratio)"
+    )
+
+    # Check what's already in the bucket
+    existing = _list_existing_tifs(bucket, gcs_prefix)
     if existing:
-        print(f"Found {len(existing)} existing images in destination, will skip")
+        print(f"Found {len(existing)} existing TIFs in destination, will skip")
 
     # Check in-flight EE tasks so we don't duplicate ongoing exports
     pending_tasks = _get_pending_task_descriptions()
@@ -282,103 +225,116 @@ def copy_openet_to_assets(
 
     submitted, skipped = 0, 0
 
-    for year in tqdm(range(start_yr, end_yr + 1), desc=f"Copy {model}"):
-        # Discover scenes for this year
-        coll = (
-            ee.ImageCollection(src_path)
-            .filterDate(f"{year}-01-01", f"{year}-12-31")
-            .filterBounds(union_geom)
-        )
-        scene_hist = coll.aggregate_histogram("system:index").getInfo()
+    # Phase 2: Export each unique scene once
+    sorted_scenes = sorted(scene_to_sites.keys(), key=lambda s: s.split("_")[-1])
 
-        if not scene_hist:
+    for scene_id in tqdm(sorted_scenes, desc=f"Export {model}"):
+        site_ids = scene_to_sites[scene_id]
+
+        if scene_id in existing:
+            skipped += 1
             continue
 
-        scene_ids = sorted(scene_hist.keys(), key=lambda s: s.split("_")[-1])
+        desc = f"cp_{model}_{scene_id}".replace("/", "_")[:100]
 
-        for img_id in scene_ids:
-            if img_id in existing:
-                skipped += 1
-                continue
+        if desc in pending_tasks:
+            skipped += 1
+            continue
 
-            desc = f"copy_{model}_{img_id}".replace("/", "_")[:100]
+        # Build export region: union of overlapping sites' buffers
+        if len(site_ids) == 1:
+            sid = next(iter(site_ids))
+            export_region = ee_geoms[sid]
+        else:
+            union = shapely.ops.unary_union([shapely_geoms[sid] for sid in site_ids])
+            export_region = ee.Geometry(union.__geo_interface__)
 
-            if desc in pending_tasks:
-                skipped += 1
-                continue
+        src_image = ee.Image(f"{src_path}/{scene_id}")
+        clipped = src_image.clip(export_region)
 
-            src_image = ee.Image(f"{src_path}/{img_id}")
-            etf_image = _normalize_etf(model, src_image, union_geom)
+        task = ee.batch.Export.image.toCloudStorage(
+            image=clipped,
+            description=desc,
+            bucket=bucket,
+            fileNamePrefix=f"{gcs_prefix}/{scene_id}",
+            region=export_region,
+            scale=30,
+            crs="EPSG:5070",
+            maxPixels=1e9,
+            fileFormat="GeoTIFF",
+        )
 
-            # Clip to union geometry
-            etf_clipped = etf_image.clip(union_geom)
+        if single_test:
+            sites_str = ", ".join(sorted(site_ids))
+            print(f"\n--- SINGLE TEST: {scene_id} (covers: {sites_str}) ---")
+            print(f"  File: gs://{bucket}/{gcs_prefix}/{scene_id}.tif")
+            print(f"  Description: {desc}")
+            task.start()
+            print("  Export started. Waiting for completion...")
+            while task.status()["state"] in ("READY", "RUNNING"):
+                time.sleep(5)
+            status = task.status()
+            print(f"  Final state: {status['state']}")
+            if status["state"] != "COMPLETED":
+                err = status.get("error_message", "unknown")
+                print(f"  Error: {err}")
+            return
 
-            # Copy key properties for provenance (cast back to Image)
-            etf_out = ee.Image(
-                etf_clipped.copyProperties(
-                    src_image,
-                    [
-                        "system:time_start",
-                        "system:index",
-                        "SPACECRAFT_ID",
-                    ],
-                ).set("source_collection", src_path)
-            )
-
-            dest_id = f"{dst_path}/{img_id}"
-
-            task = ee.batch.Export.image.toAsset(
-                image=etf_out,
-                description=desc,
-                assetId=dest_id,
-                region=union_geom,
-                scale=30,
-                crs="EPSG:5070",
-                maxPixels=1e13,
-            )
-
-            if _start_export(task, desc):
-                submitted += 1
+        if _start_export(task, desc):
+            submitted += 1
 
     print(f"Submitted {submitted} export tasks for {model} (skipped {skipped})")
 
 
 if __name__ == "__main__":
     import argparse
+    import traceback
 
     from swimrs.data_extraction.ee.ee_utils import is_authorized
 
-    parser = argparse.ArgumentParser(description="Copy OpenET images to user-owned EE assets")
+    parser = argparse.ArgumentParser(description="Copy OpenET images to GCS as GeoTIFF chips")
     parser.add_argument("--shapefile", required=True, help="Path to polygon shapefile")
     parser.add_argument(
-        "--model",
-        required=True,
+        "--models",
+        nargs="+",
         choices=list(OPENET_SOURCES),
-        help="OpenET model name",
+        required=True,
+        help="One or more OpenET model names",
     )
     parser.add_argument("--source", type=str, default=None, help="Override source collection path")
-    parser.add_argument(
-        "--dest", type=str, default=None, help="Override destination collection path"
-    )
+    parser.add_argument("--project", type=str, default="ee-dgketchum", help="EE project ID")
     parser.add_argument("--sites", type=str, default=None, help="Comma-separated site IDs")
-    parser.add_argument("--start-yr", type=int, default=2016)
-    parser.add_argument("--end-yr", type=int, default=2024)
+    parser.add_argument("--start-date", type=str, default="2016-01-01")
+    parser.add_argument("--end-date", type=str, default="2024-12-31")
     parser.add_argument("--feature-id", type=str, default="site_id")
     parser.add_argument("--buffer", type=int, default=4000, help="Buffer distance in meters")
+    parser.add_argument("--bucket", type=str, default=DEFAULT_BUCKET, help="GCS bucket name")
+    parser.add_argument(
+        "--single-test", action="store_true", help="Export one image and wait to verify"
+    )
     args = parser.parse_args()
 
-    is_authorized()
+    is_authorized(project=args.project)
 
     sites = [s.strip() for s in args.sites.split(",")] if args.sites else None
 
-    copy_openet_to_assets(
-        shapefile=args.shapefile,
-        model=args.model,
-        source_collection=args.source,
-        dest_collection=args.dest,
-        feature_id=args.feature_id,
-        buffer_m=args.buffer,
-        start_yr=args.start_yr,
-        end_yr=args.end_yr,
-        select=sites,
-    )
+    for model in args.models:
+        try:
+            print(f"\n{'=' * 60}")
+            print(f"  Starting model: {model}")
+            print(f"{'=' * 60}\n")
+            copy_openet_to_bucket(
+                shapefile=args.shapefile,
+                model=model,
+                bucket=args.bucket,
+                source_collection=args.source,
+                feature_id=args.feature_id,
+                buffer_m=args.buffer,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                select=sites,
+                single_test=args.single_test,
+            )
+        except Exception:
+            traceback.print_exc()
+            print(f"\n*** {model} failed, skipping to next model ***\n")
