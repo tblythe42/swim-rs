@@ -794,10 +794,6 @@ def _write_properties_from_container(
     else:
         kc_max = np.full(n_fields, 1.2)
 
-    # Apply m_kc multiplier from calibration (kc_max_eff = kc_max_base × m_kc)
-    if calibrated_params is not None and "m_kc" in calibrated_params:
-        kc_max = kc_max * calibrated_params["m_kc"]
-
     # f_sub
     if calibrated_params is not None and "f_sub" in calibrated_params:
         f_sub = calibrated_params["f_sub"]
@@ -1321,7 +1317,6 @@ def _load_calibrated_params(
         "aw": "aw",
         "mad": "mad",
         "f_sub": "f_sub",
-        "m_kc": "m_kc",
     }
 
     # Initialize result with empty arrays

@@ -2,7 +2,7 @@
 
 Tests cover:
 - _merge_sensors(): preference order, NaN fill, single sensor
-- _compute_k_parameters(): all-NaN defaults, no low-NDVI, kc_max p95
+- _compute_k_parameters(): all-NaN defaults, no low-NDVI, kc_max floor
 - _compute_groundwater_subsidy(): ET > PPT subsidy, ET < PPT no subsidy, zero PPT
 - _detect_irrigation_windows(): flat NDVI, clear ramp, >200 NaN, DOY invariants
 """
@@ -143,16 +143,15 @@ class TestComputeKParameters:
         ke, kc = calc._compute_k_parameters(ds)
         assert float(ke.values) == 1.0
 
-    def test_kc_max_no_floor(self):
-        """kc_max is the 95th percentile of ETf with no floor."""
+    def test_kc_max_floor_enforced(self):
+        """kc_max is at least 1.25 even when all ETf is low."""
         calc = _make_calculator()
         ds = self._make_ds(
             [0.1, 0.2, 0.15, 0.1, 0.05],
             [0.5, 0.6, 0.55, 0.7, 0.65],
         )
         ke, kc = calc._compute_k_parameters(ds)
-        expected_kc = float(np.percentile([0.1, 0.2, 0.15, 0.1, 0.05], 95))
-        assert_allclose(float(kc.values), expected_kc, atol=0.01)
+        assert float(kc.values) >= 1.25
 
     def test_known_percentile_scenario(self):
         """90th percentile of ETf where NDVI < 0.3 matches manual calculation."""

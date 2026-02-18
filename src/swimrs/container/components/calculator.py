@@ -560,13 +560,13 @@ class Calculator(Component):
                 ke_max = 1.0
                 self._log.debug("no_low_ndvi", site=site_str)
 
-            # kc_max: 95th percentile of ALL ETf observations (no floor)
+            # kc_max: 90th percentile of ALL ETf observations, with floor of 1.25
             # (does NOT require NDVI to be present)
             all_etf_obs = site_etf.dropna().values
             if len(all_etf_obs) > 0:
-                kc_max = float(np.percentile(all_etf_obs, 95))
+                kc_max = max(float(np.percentile(all_etf_obs, 90)), 1.25)
             else:
-                kc_max = 1.2
+                kc_max = 1.25
 
             results_ke[site_str] = ke_max
             results_kc[site_str] = kc_max
@@ -574,7 +574,7 @@ class Calculator(Component):
         # Convert back to xarray DataArrays
         sites = ds.coords["site"].values
         ke_values = [results_ke.get(str(s), 1.0) for s in sites]
-        kc_values = [results_kc.get(str(s), 1.2) for s in sites]
+        kc_values = [results_kc.get(str(s), 1.25) for s in sites]
 
         ke_da = xr.DataArray(ke_values, coords={"site": sites}, dims=["site"])
         kc_da = xr.DataArray(kc_values, coords={"site": sites}, dims=["site"])
