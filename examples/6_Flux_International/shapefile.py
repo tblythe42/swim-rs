@@ -9,7 +9,9 @@ def create_filtered_shapefiles():
     Outputs: points shapefile and 150m buffer shapefile
     """
     # Read the shapefile
-    gdf = gpd.read_file("/data/ssd2/swim/6_Flux_International/data/gis/flux_intl_28DEC2025.shp")
+    gdf = gpd.read_file(
+        "/data/ssd2/swim/6_Flux_International/data/gis/flux_intl_28DEC2025.shp", engine="fiona"
+    )
 
     # Convert end to datetime if it's not already
     gdf["end"] = pd.to_datetime(gdf["end"])

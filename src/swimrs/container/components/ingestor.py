@@ -96,7 +96,13 @@ def _parse_single_csv(
 
     series_list = []
     for _, row in df.iterrows():
-        field_id = str(row[uid_column])
+        raw_id = row[uid_column]
+        # iterrows() upcasts int→float; normalize "1.0" → "1"
+        try:
+            raw_id = int(raw_id)
+        except (ValueError, TypeError):
+            pass
+        field_id = str(raw_id)
 
         if fields_set and field_id not in fields_set:
             continue

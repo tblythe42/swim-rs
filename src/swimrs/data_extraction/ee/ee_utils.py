@@ -473,7 +473,7 @@ def as_ee_feature_collection(
             return ee.FeatureCollection(fields)
         # Local shapefile path
         if os.path.exists(fields):
-            gdf = gpd.read_file(fields)
+            gdf = gpd.read_file(fields, engine="fiona")
             if gdf.crs and gdf.crs.to_epsg() != 4326:
                 gdf = gdf.to_crs(epsg=4326)
             feats = []

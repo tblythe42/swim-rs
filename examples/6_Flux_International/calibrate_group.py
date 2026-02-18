@@ -26,7 +26,7 @@ def _load_config(calibrate: bool = True) -> ProjectConfig:
 
 
 def _site_ids(cfg: ProjectConfig, select: list[str] | None = None) -> list[str]:
-    gdf = gpd.read_file(cfg.fields_shapefile)
+    gdf = gpd.read_file(cfg.fields_shapefile, engine="fiona")
     if cfg.feature_id_col not in gdf.columns:
         raise ValueError(
             f"Feature ID column {cfg.feature_id_col} not found in {cfg.fields_shapefile}"

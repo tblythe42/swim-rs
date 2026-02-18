@@ -145,7 +145,7 @@ def create_master_shapefile(footprints_shp, metadata_csv, output_shp, overwrite=
         raise FileExistsError(f"Output file exists: {output_shp}. Use overwrite=True to replace.")
 
     # Load footprints
-    footprints = gpd.read_file(footprints_shp)
+    footprints = gpd.read_file(footprints_shp, engine="fiona")
     if "site_id" not in footprints.columns:
         raise ValueError(
             f"Footprints shapefile must have 'site_id' column. Found: {list(footprints.columns)}"
@@ -241,7 +241,7 @@ def extract_stations(master_shp, site_ids, output_shp, overwrite=False):
         raise FileExistsError(f"Output file exists: {output_shp}. Use overwrite=True to replace.")
 
     # Load master shapefile
-    master = gpd.read_file(master_shp)
+    master = gpd.read_file(master_shp, engine="fiona")
 
     # Filter to requested sites
     extracted = master[master["site_id"].isin(site_ids)].copy()
@@ -314,7 +314,7 @@ def filter_by_classification(master_shp, classification, output_shp, overwrite=F
         raise FileExistsError(f"Output file exists: {output_shp}. Use overwrite=True to replace.")
 
     # Load master shapefile
-    master = gpd.read_file(master_shp)
+    master = gpd.read_file(master_shp, engine="fiona")
 
     # Filter by classification (handle both column names)
     cls_col = _get_classification_col(master)
@@ -369,7 +369,7 @@ def list_stations(master_shp, classification=None):
     pandas.DataFrame
         Station information.
     """
-    master = gpd.read_file(master_shp)
+    master = gpd.read_file(master_shp, engine="fiona")
 
     if classification:
         cls_col = _get_classification_col(master)
@@ -383,7 +383,7 @@ def list_stations(master_shp, classification=None):
 
 def print_summary(master_shp):
     """Print summary of master shapefile."""
-    master = gpd.read_file(master_shp)
+    master = gpd.read_file(master_shp, engine="fiona")
 
     print(f"\n=== Master Flux Stations: {master_shp} ===")
     print(f"Total stations: {len(master)}")

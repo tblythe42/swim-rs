@@ -88,7 +88,7 @@ def assign_gridmet_ids(
     """Map fields to GridMET IDs (optionally via provided centroids) and write join shapefile."""
     print("Assign field -> GridMET IDs")
 
-    fields = gpd.read_file(fields)
+    fields = gpd.read_file(fields, engine="fiona")
     if fields.crs is None:
         fields.set_crs("EPSG:5071", inplace=True)
 
@@ -104,7 +104,7 @@ def assign_gridmet_ids(
         fields_cent = fields_cent.loc[mask].copy()
 
     if gridmet_points is not None:
-        pts = gpd.read_file(gridmet_points)
+        pts = gpd.read_file(gridmet_points, engine="fiona")
         if pts.crs != fields_cent.crs:
             pts = pts.to_crs(fields_cent.crs)
 
@@ -143,7 +143,7 @@ def assign_gridmet_ids(
 
 def sample_gridmet_corrections(fields_join, gridmet_ras, factors_js, gridmet_id_col="GFID"):
     """Sample correction rasters and write factors JSON keyed by GFID."""
-    fields = gpd.read_file(fields_join)
+    fields = gpd.read_file(fields_join, engine="fiona")
     if fields.crs is None:
         fields.set_crs("EPSG:5071", inplace=True)
 
@@ -219,7 +219,7 @@ def download_gridmet(
     if not end:
         end = "2021-12-31"
 
-    fields = gpd.read_file(fields)
+    fields = gpd.read_file(fields, engine="fiona")
     fields.index = fields[feature_id]
 
     gridmet_factors_dict = {}
@@ -470,7 +470,7 @@ def gridmet_elevation(shp_in, shp_out):
     - shp_in: input shapefile path with `lat`/`lon` fields.
     - shp_out: output shapefile path with new `ELEV_M` column.
     """
-    df = gpd.read_file(shp_in)
+    df = gpd.read_file(shp_in, engine="fiona")
     l = []
     for i, r in df.iterrows():
         lat, lon = r["lat"], r["lon"]

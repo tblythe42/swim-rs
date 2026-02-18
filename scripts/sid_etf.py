@@ -16,7 +16,6 @@ WAIT_MINUTES = 10
 MAX_RETRIES = 6
 
 IRR = "projects/ee-dgketchum/assets/IrrMapper/IrrMapperComp"
-IRR_MIN_YR_ASSET = "projects/ee-dgketchum/assets/SID/irr_min_yr_mask"
 FEATURE_ID = "FID"
 SHAPEFILE = (
     "/nas/Montana/statewide_irrigation_dataset/statewide_irrigation_dataset_15FEB2024_aea.shp"
@@ -54,6 +53,9 @@ def _normalize_etf(model, image):
 
     Returns a single-band 'etf' image (float, clamped 0-2) with system:time_start
     and system:index copied from the source image.
+
+    For ET_BAND_MODELS (disalexi, geesebal, ptjpl), the image must already have
+    an 'eto' band attached via join before calling this function.
     """
     if model in DIRECT_ETF_MODELS:
         etf = image.select("et_fraction").divide(10000).clamp(0, 2).rename("etf")
@@ -61,9 +63,7 @@ def _normalize_etf(model, image):
         etf = image.select("et_ensemble_mad").divide(10000).clamp(0, 2).rename("etf")
     elif model in ET_BAND_MODELS:
         et_img = image.select("et").divide(1000)
-        scene_date = image.date()
-        date_str = scene_date.format("YYYYMMdd")
-        eto_img = ee.Image(ee.String(REFET_COLLECTION + "/").cat(date_str)).select("eto")
+        eto_img = image.select("eto")
         etf = et_img.divide(eto_img).clamp(0, 2).rename("etf")
     else:
         raise ValueError(f"Unknown model: {model}")
@@ -73,6 +73,8 @@ def _normalize_etf(model, image):
 
 def extract_etf(
     feature_coll,
+    irr_coll,
+    irr_min_yr_mask,
     model="ensemble",
     mask_type="irr",
     start_yr=2016,
@@ -96,17 +98,6 @@ def extract_etf(
         Explicit list of years to process. Overrides start_yr/end_yr.
     """
     src_path = OPENET_SOURCES[model]
-    irr_coll = ee.ImageCollection(IRR)
-
-    # Load pre-computed multi-year mask asset
-    try:
-        irr_min_yr_mask = ee.Image(IRR_MIN_YR_ASSET)
-        irr_min_yr_mask.getInfo()
-        print("  Using pre-computed irr_min_yr_mask asset")
-    except ee.ee_exception.EEException:
-        print("  WARNING: irr_min_yr_mask asset not found, computing live")
-        remap = irr_coll.filterDate("1987-01-01", "2024-12-31").select("classification")
-        irr_min_yr_mask = remap.map(lambda img: img.lt(1)).sum().gte(5)
 
     if years is None:
         years = list(range(start_yr, end_yr + 1))
@@ -128,6 +119,26 @@ def extract_etf(
             .filterDate(f"{year}-01-01", f"{year}-12-31")
             .filterBounds(feature_coll.geometry())
         )
+
+        # For ET-band models, join reference ET (eto) by date before normalizing.
+        # DisALEXI/geeSEBAL/ptJPL time_start is Landsat overpass time; refET is midnight.
+        # Use maxDifference of 1 day and match on calendar date via millis rounding.
+        if model in ET_BAND_MODELS:
+            refet = (
+                ee.ImageCollection(REFET_COLLECTION)
+                .filterDate(f"{year}-01-01", f"{year}-12-31")
+                .select("eto")
+            )
+            ms_per_day = 86400000
+            filt = ee.Filter.maxDifference(
+                difference=ms_per_day,
+                leftField="system:time_start",
+                rightField="system:time_start",
+            )
+            joined = ee.ImageCollection(ee.Join.saveFirst("refet_match").apply(coll, refet, filt))
+            coll = joined.map(
+                lambda img: img.addBands(ee.Image(img.get("refet_match")).select("eto"))
+            )
 
         # Normalize ETf per image and apply mask
         if mask_type == "irr":
@@ -241,6 +252,11 @@ if __name__ == "__main__":
 
     is_authorized(args.project)
 
+    irr_coll = ee.ImageCollection(IRR)
+    remap = irr_coll.filterDate("1987-01-01", "2024-12-31").select("classification")
+    irr_min_yr_mask = remap.map(lambda img: img.lt(1)).sum().gte(5)
+    print("Computed irr_min_yr_mask (live)")
+
     gdf = gpd.read_file(SHAPEFILE)
     county_fids = gdf.groupby("COUNTY_NO")[FEATURE_ID].apply(list).to_dict()
 
@@ -276,6 +292,8 @@ if __name__ == "__main__":
                     start_time = time.time()
                     result = extract_etf(
                         fc,
+                        irr_coll,
+                        irr_min_yr_mask,
                         model=model,
                         mask_type=mask_type,
                         start_yr=args.start_yr,

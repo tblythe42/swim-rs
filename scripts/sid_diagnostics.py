@@ -13,6 +13,7 @@ import os
 import re
 from glob import glob
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
@@ -233,6 +234,105 @@ def yearly_figures(ds, irr_df, field, out_dir=None):
         _save_or_show(fig, out_dir, f"{field}_{yr}.png")
 
 
+def capture_histogram(ds, county, out_dir=None):
+    """Histogram of mean annual Landsat captures per field for a county.
+
+    For each field, computes the observation count per year then averages
+    across years.  Stacks irrigated and non-irrigated (inv_irr) captures.
+    Vertical lines mark the 5th and 95th percentiles of total captures.
+    """
+    dates = pd.to_datetime(ds["date"].values)
+    fids = ds["fid"].values
+    years = sorted(set(dates.year))
+    n_years = len(years)
+
+    masks = [("ndvi_irr_ct", "Irrigated", "steelblue")]
+    if "ndvi_inv_irr_ct" in ds:
+        masks.append(("ndvi_inv_irr_ct", "Non-Irrigated", "goldenrod"))
+
+    mean_by_var = {}
+    for var, label, _ in masks:
+        ct = ds[var].values.astype(bool)
+        annual = np.zeros((len(fids), n_years))
+        for i, yr in enumerate(years):
+            yr_mask = dates.year == yr
+            annual[:, i] = ct[yr_mask, :].sum(axis=0)
+        mean_by_var[label] = annual.mean(axis=1)
+
+    total = sum(mean_by_var.values())
+    p5 = np.percentile(total, 5)
+    p95 = np.percentile(total, 95)
+    median = np.median(total)
+
+    print(f"\n=== County {county} capture histogram ===")
+    print(f"  Fields: {len(fids)}")
+    print(f"  Years:  {years[0]}-{years[-1]} ({n_years} yrs)")
+    for label, vals in mean_by_var.items():
+        print(f"  {label} — min: {vals.min():.1f}, max: {vals.max():.1f}, mean: {vals.mean():.1f}")
+    print(f"  Total — min: {total.min():.1f}, max: {total.max():.1f}, mean: {total.mean():.1f}")
+    print(f"  5th pctl: {p5:.1f}, median: {median:.1f}, 95th pctl: {p95:.1f}")
+
+    # Bin fields by total captures, split each bar by irr/inv_irr proportion
+    bin_edges = np.linspace(total.min(), total.max(), 41)
+    bin_idx = np.clip(np.digitize(total, bin_edges) - 1, 0, len(bin_edges) - 2)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    n_bins = len(bin_centers)
+
+    bar_data = {}
+    for _, label, _ in masks:
+        bar_data[label] = np.zeros(n_bins)
+
+    for b in range(n_bins):
+        bmask = bin_idx == b
+        n = bmask.sum()
+        if n == 0:
+            continue
+        bin_total = total[bmask].sum()
+        for _, label, _ in masks:
+            bar_data[label][b] = n * mean_by_var[label][bmask].sum() / bin_total
+
+    fig = go.Figure()
+
+    for _, label, color in masks:
+        fig.add_trace(
+            go.Bar(
+                x=bin_centers,
+                y=bar_data[label],
+                marker_color=color,
+                opacity=0.8,
+                name=label,
+                width=bin_edges[1] - bin_edges[0],
+            )
+        )
+
+    for pval, plabel, color in [
+        (p5, "5th", "firebrick"),
+        (p95, "95th", "firebrick"),
+        (median, "Median", "black"),
+    ]:
+        fig.add_vline(
+            x=pval,
+            line_dash="dash",
+            line_color=color,
+            line_width=2,
+            annotation_text=f"{plabel}: {pval:.1f}",
+            annotation_position="top",
+        )
+
+    fig.update_layout(
+        title=f"County {county} — Mean Annual Landsat Captures per Field "
+        f"(n={len(fids)}, {years[0]}-{years[-1]})",
+        xaxis_title="Mean Annual Captures",
+        yaxis_title="Number of Fields",
+        barmode="stack",
+        template="plotly_white",
+        width=900,
+        height=500,
+    )
+
+    _save_or_show(fig, out_dir, f"{county}_capture_histogram.png")
+
+
 def _save_or_show(fig, out_dir, filename):
     """Write figure to PNG or show interactively."""
     if out_dir:
@@ -248,9 +348,15 @@ def main():
     parser = argparse.ArgumentParser(
         description="SID data diagnostics — observation frequency, missingness, irrigation QC"
     )
-    parser.add_argument("--county", required=True, help="County code (e.g. 099)")
     parser.add_argument(
-        "--field", required=True, help="Field ID (e.g. 099_001434). Comma-separated for multiple."
+        "--county",
+        required=True,
+        help="County code(s), comma-separated (e.g. 099 or 001,003,099)",
+    )
+    parser.add_argument(
+        "--field",
+        default=None,
+        help="Field ID (e.g. 099_001434). Comma-separated for multiple.",
     )
     parser.add_argument("--root", default="/nas/swim/sid", help="SID root directory")
     parser.add_argument(
@@ -258,23 +364,40 @@ def main():
         default=None,
         help="Output directory for figures (default: show interactively)",
     )
+    parser.add_argument(
+        "--histogram",
+        action="store_true",
+        help="Plot histogram of mean annual captures per field for each county",
+    )
     args = parser.parse_args()
 
+    if not args.histogram and not args.field:
+        parser.error("--field is required unless --histogram is used")
+
     out_dir = os.path.expanduser(args.out_dir) if args.out_dir else None
-    ds, irr_df = load_data(args.root, args.county)
+    counties = [c.strip() for c in args.county.split(",")]
 
-    fields = [f.strip() for f in args.field.split(",")]
-
-    for field in fields:
-        if field not in ds["fid"].values:
-            print(f"WARNING: field {field} not found in dataset, skipping")
+    for county in counties:
+        try:
+            ds, irr_df = load_data(args.root, county)
+        except FileNotFoundError as e:
+            print(f"WARNING: {e}, skipping county {county}")
             continue
 
-        print_stats(ds, irr_df, field)
-        coverage_figure(ds, irr_df, field, out_dir=out_dir)
-        yearly_figures(ds, irr_df, field, out_dir=out_dir)
+        if args.histogram:
+            capture_histogram(ds, county, out_dir=out_dir)
 
-    ds.close()
+        if args.field:
+            fields = [f.strip() for f in args.field.split(",")]
+            for field in fields:
+                if field not in ds["fid"].values:
+                    print(f"WARNING: field {field} not found in dataset, skipping")
+                    continue
+                print_stats(ds, irr_df, field)
+                coverage_figure(ds, irr_df, field, out_dir=out_dir)
+                yearly_figures(ds, irr_df, field, out_dir=out_dir)
+
+        ds.close()
 
 
 if __name__ == "__main__":

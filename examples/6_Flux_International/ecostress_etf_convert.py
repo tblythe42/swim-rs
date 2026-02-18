@@ -222,7 +222,7 @@ def main(
         output_dir = os.path.join(project_data, "remote_sensing/ecostress/extracts/etf/no_mask")
 
     # Load site list from shapefile
-    gdf = gpd.read_file(shapefile)
+    gdf = gpd.read_file(shapefile, engine="fiona")
     sites = sorted(gdf[uid_column].astype(str).unique().tolist())
     print(f"Sites from shapefile: {len(sites)}")
 

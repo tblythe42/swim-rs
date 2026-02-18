@@ -383,7 +383,7 @@ class SwimContainer:
         except ImportError:
             raise ImportError("geopandas is required to create a container from a shapefile")
 
-        gdf = gpd.read_file(fields_shapefile)
+        gdf = gpd.read_file(fields_shapefile, engine="fiona")
 
         if uid_column not in gdf.columns:
             raise ValueError(

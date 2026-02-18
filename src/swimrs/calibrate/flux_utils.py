@@ -11,7 +11,7 @@ def get_flux_sites(
     sites, crop_only=False, return_df=False, western_only=False, index_col=None, header=None
 ):
     if sites.endswith(".shp"):
-        sdf = gpd.read_file(sites)
+        sdf = gpd.read_file(sites, engine="fiona")
         sdf.index = sdf[index_col]
 
     else:

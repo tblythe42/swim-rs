@@ -59,10 +59,11 @@ def fig_site_map(shapefile: str, summary_df: pd.DataFrame, output_path: str):
         world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
     except Exception:
         world = gpd.read_file(
-            "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip"
+            "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip",
+            engine="fiona",
         )
 
-    gdf = gpd.read_file(shapefile)
+    gdf = gpd.read_file(shapefile, engine="fiona")
     gdf = gdf.set_index("sid")
 
     # Merge with metrics if available

@@ -100,7 +100,7 @@ def load_shapefile(
     geopandas.GeoDataFrame
         GeoDataFrame indexed by feature_id, in EPSG:4326.
     """
-    df = gpd.read_file(shapefile)
+    df = gpd.read_file(shapefile, engine="fiona")
     df = df.set_index(feature_id, drop=False)
 
     if buffer:

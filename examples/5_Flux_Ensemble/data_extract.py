@@ -340,7 +340,7 @@ def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
 
 if __name__ == "__main__":
     config = _load_config()
-    gdf = gpd.read_file(config.fields_shapefile)
+    gdf = gpd.read_file(config.fields_shapefile, engine="fiona")
     if config.feature_id_col not in gdf.columns:
         raise ValueError(
             f"Feature ID column {config.feature_id_col!r} not found in {config.fields_shapefile}"

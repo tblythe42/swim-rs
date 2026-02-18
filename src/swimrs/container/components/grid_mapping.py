@@ -91,7 +91,7 @@ class GridMapping:
         if not shapefile.exists():
             raise FileNotFoundError(f"Shapefile not found: {shapefile}")
 
-        gdf = gpd.read_file(shapefile)
+        gdf = gpd.read_file(shapefile, engine="fiona")
 
         if uid_column not in gdf.columns:
             raise KeyError(

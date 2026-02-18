@@ -194,7 +194,7 @@ def sparse_sample_ndvi(
     Returns
     - None; prints exported/skipped counts.
     """
-    df = gpd.read_file(shapefile)
+    df = gpd.read_file(shapefile, engine="fiona")
     df.index = df[feature_id]
 
     if not df.crs.srs == "EPSG:4326":
