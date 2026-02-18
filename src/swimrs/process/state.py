@@ -28,7 +28,17 @@ __all__ = [
 ]
 
 # PEST++ calibration parameter names (matches mult file naming convention)
-TUNABLE_PARAMS = ["aw", "ndvi_k", "ndvi_0", "mad", "swe_alpha", "swe_beta", "ks_alpha", "kr_alpha"]
+TUNABLE_PARAMS = [
+    "aw",
+    "ndvi_k",
+    "ndvi_0",
+    "mad",
+    "swe_alpha",
+    "swe_beta",
+    "ks_alpha",
+    "kr_alpha",
+    "m_kc",
+]
 
 
 @dataclass
@@ -691,5 +701,13 @@ def load_pest_mult_properties(
                         f"property '{pest_name}' and field '{fid}'. "
                         "Expected a CSV with a numeric value in column '1'."
                     ) from exc
+
+    # Multiplicative m_kc: kc_max_eff = kc_max_base × m_kc
+    for i, fid in enumerate(fids):
+        csv_file = mult_path / f"p_m_kc_{fid}_0_constant.csv"
+        if csv_file.exists():
+            df = pd.read_csv(csv_file, index_col=0, header=0)
+            m_kc = float(df.iloc[0]["1"])
+            props.kc_max[i] *= m_kc
 
     return props
