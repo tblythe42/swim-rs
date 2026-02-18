@@ -1,13 +1,17 @@
-"""Extract ETf from pre-computed OpenET v2.1 EE asset collections.
+"""Extract ETf from official OpenET v2.1 source collections.
 
-Reads from user-owned cached EE ImageCollections that contain pre-normalized
-ETf (single ``etf`` band, float, 0-2 range).  These cached copies are created
-by ``copy_openet_assets.py`` and live under
-``projects/ee-dgketchum/assets/openet_etf/v2_1/{model}``.
+Reads directly from the public OpenET v2.1 EE ImageCollections, applies
+per-model band selection and normalization to produce ETf (0-2 range),
+then exports per-field zonal means as CSVs.
+
+Band/scaling by model:
+- ssebop, sims, eemetric: ``et_fraction / 10000``
+- geesebal, disalexi, ptjpl: ``et / 1000 / ETo``  (GridMET daily ETo)
+- ensemble: ``et_ensemble_mad / 1000 / ETo``  (GridMET daily ETo)
 
 Usage:
     python etf_asset_extract.py --shapefile <path> --model ssebop \\
-        [--mask no_mask] [--sites SITE1,SITE2] [--bucket BUCKET]
+        [--mask irr] [--sites SITE1,SITE2] [--bucket BUCKET]
 """
 
 import os
@@ -24,64 +28,69 @@ from swimrs.data_extraction.ee.common import (
     setup_irrigation_masks,
 )
 
-# Cached user-owned EE asset collections (created by copy_openet_assets.py).
-# These contain pre-normalized ETf: single "etf" band, float, 0-2 range.
-CACHED_ROOT = "projects/ee-dgketchum/assets/openet_etf/v2_1"
-
-ASSET_PATHS = {
-    "ssebop": f"{CACHED_ROOT}/ssebop",
-    "sims": f"{CACHED_ROOT}/sims",
-    "geesebal": f"{CACHED_ROOT}/geesebal",
-    "eemetric": f"{CACHED_ROOT}/eemetric",
-    "ensemble": f"{CACHED_ROOT}/ensemble",
-    "ptjpl": f"{CACHED_ROOT}/ptjpl",
-    "disalexi": f"{CACHED_ROOT}/disalexi",
+# Official OpenET v2.1 source collections
+OPENET_V21 = {
+    "ssebop": "projects/openet/assets/ssebop/conus/gridmet/landsat/v2_1",
+    "sims": "projects/openet/assets/sims/conus/gridmet/landsat/v2_1",
+    "geesebal": "projects/openet/assets/geesebal/conus/gridmet/landsat/v2_1",
+    "eemetric": "projects/openet/assets/eemetric/conus/gridmet/landsat/v2_1",
+    "ensemble": "projects/openet/assets/ensemble/conus/gridmet/landsat/v2_1",
+    "ptjpl": "projects/openet/assets/ptjpl/conus/nldas2/landsat/v2_1",
+    "disalexi": "projects/openet/assets/disalexi/conus/cfsr/landsat/v2_1",
 }
 
+# Models that store raw ET (mm) and need division by reference ET
+_ET_MODELS = {"geesebal", "ptjpl", "disalexi", "ensemble"}
 
-def _get_etf_image(model, img_id, polygon):
-    """Load an ETf ee.Image from a cached asset scene.
+# Band name for ET models (default "et"; ensemble uses a different band)
+_ET_BAND_NAME = {"ensemble": "et_ensemble_mad"}
 
-    All cached models have a single ``etf`` band in 0-2 range.
+# GridMET reference ET for normalizing ET→ETf
+_GRIDMET = "IDAHO_EPSCOR/GRIDMET"
+_ETO_BAND = "eto"
 
-    Parameters
-    ----------
-    model : str
-        Model name (key into ASSET_PATHS).
-    img_id : str
-        Scene system:index within the collection.
-    polygon : ee.Geometry
-        Geometry (unused, kept for API compatibility).
 
-    Returns
-    -------
-    ee.Image
-        Single-band ETf image.
+def _normalize_etf(model, img_id):
+    """Load an image from a v2.1 source collection and normalize to ETf.
+
+    Returns a single-band ee.Image named ``etf`` in the 0-2 range.
     """
-    asset_path = ASSET_PATHS[model]
-    full_id = f"{asset_path}/{img_id}"
-    return ee.Image(full_id).select("etf")
+    src_path = OPENET_V21[model]
+    src_image = ee.Image(f"{src_path}/{img_id}")
+
+    if model in _ET_MODELS:
+        # et band is in mm × 1000 (integer); divide by 1000 then by daily ETo
+        band = _ET_BAND_NAME.get(model, "et")
+        et_mm = src_image.select(band).divide(1000)
+        # Get the image date for matching GridMET ETo
+        date = src_image.date()
+        eto = (
+            ee.ImageCollection(_GRIDMET)
+            .filterDate(date, date.advance(1, "day"))
+            .first()
+            .select(_ETO_BAND)
+        )
+        return et_mm.divide(eto).rename("etf")
+
+    # ssebop, sims, eemetric: et_fraction is integer × 10000
+    return src_image.select("et_fraction").divide(10000).rename("etf")
 
 
-def extract_etf_assets(
+def extract_etf_v21(
     shapefile,
     bucket,
     feature_id,
     model,
-    mask_type="no_mask",
+    mask_type="irr",
     start_yr=2016,
     end_yr=2024,
     check_dir=None,
     state_col="state",
     select=None,
-    file_prefix="swim",
+    file_prefix="5_Flux_Ensemble",
     dest="bucket",
 ):
-    """Export per-field ETf zonal statistics from OpenET EE asset collections.
-
-    Iterates features row-by-row from a local shapefile, discovers scenes
-    from the pre-computed OpenET asset collection, applies optional irrigation
-    masking, and exports mean ETf via ``reduceRegions`` at 30 m.
+    """Export per-field ETf zonal stats from OpenET v2.1 source collections.
 
     Parameters
     ----------
@@ -92,9 +101,9 @@ def extract_etf_assets(
     feature_id : str
         Column name for feature identifier.
     model : str
-        Model name: 'ssebop', 'sims', 'geesebal', 'eemetric', or 'ensemble'.
+        Model name (key into OPENET_V21).
     mask_type : str
-        Irrigation masking: 'no_mask', 'irr', or 'inv_irr'.
+        Irrigation masking: 'irr', 'inv_irr', or 'no_mask'.
     start_yr, end_yr : int
         Inclusive year range.
     check_dir : str, optional
@@ -108,26 +117,27 @@ def extract_etf_assets(
     dest : str
         Export destination: 'drive' or 'bucket'.
     """
-    if model not in ASSET_PATHS:
-        raise ValueError(f"Unknown model: {model}. Available: {list(ASSET_PATHS)}")
+    if model not in OPENET_V21:
+        raise ValueError(f"Unknown model: {model}. Available: {list(OPENET_V21)}")
 
     if dest == "bucket" and not bucket:
         raise ValueError("bucket is required when dest='bucket'")
 
-    asset_path = ASSET_PATHS[model]
+    src_path = OPENET_V21[model]
     df = load_shapefile(shapefile, feature_id)
 
     if select is not None:
         df = df[df.index.isin(select)]
 
-    print(f"OpenET asset ETf ({model}): {len(df)} fields, mask={mask_type}, {start_yr}-{end_yr}")
+    print(f"OpenET v2.1 ETf ({model}): {len(df)} fields, mask={mask_type}, {start_yr}-{end_yr}")
+    print(f"Source: {src_path}")
 
     if mask_type != "no_mask":
         irr_coll, irr_min_yr_mask, lanid, east_fc = setup_irrigation_masks()
 
     skipped, exported = 0, 0
 
-    for fid, row in tqdm(df.iterrows(), desc=f"{model} asset ETf", total=len(df)):
+    for fid, row in tqdm(df.iterrows(), desc=f"{model} v2.1 ETf", total=len(df)):
         if row["geometry"].geom_type not in ("Polygon", "MultiPolygon"):
             continue
 
@@ -144,7 +154,7 @@ def extract_etf_assets(
 
             # Discover scenes for this field-year
             etf_coll = (
-                ee.ImageCollection(asset_path)
+                ee.ImageCollection(src_path)
                 .filterDate(f"{year}-01-01", f"{year}-12-31")
                 .filterBounds(polygon)
             )
@@ -176,7 +186,7 @@ def extract_etf_assets(
                 selectors.append(_name)
 
                 try:
-                    etf_img = _get_etf_image(model, img_id, polygon).rename(_name)
+                    etf_img = _normalize_etf(model, img_id).rename(_name)
                 except Exception as e:
                     print(f"{_name} error: {e}")
                     continue
@@ -210,7 +220,7 @@ def extract_etf_assets(
             )
             exported += 1
 
-    print(f"OpenET asset ETf ({model}): exported {exported}, skipped {skipped}")
+    print(f"OpenET v2.1 ETf ({model}): exported {exported}, skipped {skipped}")
 
 
 if __name__ == "__main__":
@@ -218,28 +228,29 @@ if __name__ == "__main__":
 
     from swimrs.data_extraction.ee.ee_utils import is_authorized
 
-    parser = argparse.ArgumentParser(description="Extract ETf from OpenET EE assets")
+    parser = argparse.ArgumentParser(description="Extract ETf from OpenET v2.1 collections")
     parser.add_argument("--shapefile", required=True, help="Path to polygon shapefile")
     parser.add_argument(
         "--model",
         required=True,
-        choices=list(ASSET_PATHS),
+        choices=list(OPENET_V21),
         help="OpenET model name",
     )
     parser.add_argument(
         "--mask",
         choices=["irr", "inv_irr", "no_mask"],
-        default="no_mask",
-        help="Mask type (default: no_mask)",
+        default="irr",
+        help="Mask type (default: irr)",
     )
     parser.add_argument("--sites", type=str, default=None, help="Comma-separated site IDs")
     parser.add_argument("--start-yr", type=int, default=2016)
     parser.add_argument("--end-yr", type=int, default=2024)
     parser.add_argument("--feature-id", type=str, default="site_id")
     parser.add_argument("--state-col", type=str, default="state")
-    parser.add_argument("--bucket", type=str, default=None)
+    parser.add_argument("--bucket", type=str, default="wudr")
     parser.add_argument("--dest", choices=["drive", "bucket"], default="bucket")
-    parser.add_argument("--file-prefix", type=str, default="swim")
+    parser.add_argument("--file-prefix", type=str, default="5_Flux_Ensemble")
+    parser.add_argument("--check-dir", type=str, default=None, help="Skip if CSV exists here")
     parser.add_argument("--debug", action="store_true", help="Process first site only")
     args = parser.parse_args()
 
@@ -251,7 +262,7 @@ if __name__ == "__main__":
         sites = sites[:1]
         print(f"DEBUG: processing only {sites}")
 
-    extract_etf_assets(
+    extract_etf_v21(
         shapefile=args.shapefile,
         bucket=args.bucket,
         feature_id=args.feature_id,
@@ -259,6 +270,7 @@ if __name__ == "__main__":
         mask_type=args.mask,
         start_yr=args.start_yr,
         end_yr=args.end_yr,
+        check_dir=args.check_dir,
         state_col=args.state_col,
         select=sites,
         file_prefix=args.file_prefix,
