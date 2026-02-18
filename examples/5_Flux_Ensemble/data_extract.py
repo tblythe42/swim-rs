@@ -87,7 +87,7 @@ def extract_ndvi(cfg: ProjectConfig, sites=None, get_sentinel: bool = True) -> N
     is_authorized()
     from swimrs.data_extraction.ee.ndvi_export import sparse_sample_ndvi
 
-    for mask in ["irr", "inv_irr"]:
+    for mask in ["irr", "inv_irr", "no_mask"]:
         dst = os.path.join(cfg.landsat_dir, "extracts", "ndvi", mask)
         sparse_sample_ndvi(
             cfg.fields_shapefile,
@@ -350,7 +350,7 @@ if __name__ == "__main__":
     # Standard extraction workflow
     # extract_snodas(config)
     # extract_properties(config)
-    # extract_ndvi(config, select_sites, get_sentinel=True)
+    extract_ndvi(config, select_sites, get_sentinel=True)
     # extract_gridmet(config, select_sites)
 
     # Fast: extract from pre-computed OpenET v2.1 EE asset collections

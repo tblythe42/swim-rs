@@ -793,7 +793,7 @@ if __name__ == "__main__":
 
         Writes loc.mat and localizer_summary.json to the pest directory.
         """
-        et_params = ["aw", "ndvi_k", "ndvi_0", "mad", "kr_alpha", "ks_alpha", "m_kc"]
+        et_params = ["aw", "ndvi_k", "ndvi_0", "mad", "kr_alpha", "ks_alpha"]
         snow_params = ["swe_alpha", "swe_beta"]
 
         par_relation = {"etf": et_params, "swe": snow_params}
@@ -998,18 +998,6 @@ if __name__ == "__main__":
                     "lower_bound": 0.5,
                     "upper_bound": 2.5,
                     "pargp": "swe_beta",
-                    "index_cols": 0,
-                    "use_cols": 1,
-                    "use_rows": None,
-                },
-                # kc_max multiplier (kc_max_eff = kc_max_base × m_kc)
-                "m_kc": {
-                    "file": self.params_file,
-                    "std": 0.05,
-                    "initial_value": 1.0,
-                    "lower_bound": 0.85,
-                    "upper_bound": 1.25,
-                    "pargp": "m_kc",
                     "index_cols": 0,
                     "use_cols": 1,
                     "use_rows": None,

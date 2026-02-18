@@ -29,7 +29,6 @@ def run_pest_sequence(
     debug_fields: list[str] | None = None,
     ies_num_threads: int | None = None,
     container_path: str | None = None,
-    freeze_pargps: list[str] | None = None,
 ):
     project = cfg.project_name
 
@@ -50,7 +49,7 @@ def run_pest_sequence(
     container = SwimContainer.open(container_path, mode="r")
 
     # Guardrail: assert Landsat NDVI exists before calibration
-    for mask in ("irr", "inv_irr"):
+    for mask in ("irr", "inv_irr", "no_mask"):
         key = f"remote_sensing/ndvi/landsat/{mask}"
         if key not in container._root:
             raise RuntimeError(f"Missing Landsat NDVI ({mask}) in container — cannot calibrate")
@@ -78,27 +77,6 @@ def run_pest_sequence(
 
     builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
     builder.build_localizer()
-
-    # Freeze specified parameter groups: set partrans="fixed" in .pst and
-    # remove their columns from loc.mat so PEST++ doesn't complain.
-    if freeze_pargps:
-        from pyemu import Matrix, Pst
-
-        pst = Pst(builder.pst_file)
-        mask = pst.parameter_data["pargp"].isin(freeze_pargps)
-        n_frozen = mask.sum()
-        pst.parameter_data.loc[mask, "partrans"] = "fixed"
-        pst.write(builder.pst_file)
-
-        loc_file = os.path.join(p_dir, "loc.mat")
-        if os.path.exists(loc_file):
-            loc = Matrix.from_ascii(loc_file)
-            frozen_names = set(pst.parameter_data.loc[mask].index.str.lower())
-            keep_cols = [c for c in loc.col_names if c.lower() not in frozen_names]
-            loc = loc.get(row_names=loc.row_names, col_names=keep_cols)
-            loc.to_ascii(loc_file)
-
-        print(f"Froze {n_frozen} parameters in groups: {freeze_pargps}")
 
     exe_ = "pestpp-ies"
 
@@ -167,7 +145,7 @@ if __name__ == "__main__":
 
     cfg = _load_config()
 
-    # Run 8: no_mask NDVI/ETf, m_kc frozen at 1.0 (isolate no_mask effect)
+    # Run 8: no_mask NDVI/ETf, 8-param, 6-model ensemble
     DEBUG_FIELDS = None
 
     results = os.path.join(cfg.project_ws, "results", "run8_no_mkc")
@@ -177,7 +155,6 @@ if __name__ == "__main__":
         results,
         pdc_remove=False,
         debug_fields=DEBUG_FIELDS,
-        freeze_pargps=["m_kc"],
     )
     elapsed = time.time() - t0
     print(f"\nTotal elapsed: {elapsed:.1f} s ({elapsed / 60:.1f} min)")
