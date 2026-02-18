@@ -48,6 +48,12 @@ def run_pest_sequence(
         container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
     container = SwimContainer.open(container_path, mode="r")
 
+    # Guardrail: assert Landsat NDVI exists before calibration
+    for mask in ("irr", "inv_irr"):
+        key = f"remote_sensing/ndvi/landsat/{mask}"
+        if key not in container._root:
+            raise RuntimeError(f"Missing Landsat NDVI ({mask}) in container — cannot calibrate")
+
     builder = PestBuilder(
         cfg,
         container,
@@ -147,7 +153,7 @@ if __name__ == "__main__":
     run_pest_sequence(
         cfg,
         results,
-        pdc_remove=True,
+        pdc_remove=False,
         debug_fields=DEBUG_FIELDS,
     )
     elapsed = time.time() - t0

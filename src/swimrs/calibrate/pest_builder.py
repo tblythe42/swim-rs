@@ -171,6 +171,7 @@ class PestBuilder:
         dynamics = exporter._get_dynamics_dict(self.plot_order)
         self.irr = dynamics.get("irr", {})
         self.ke_max = dynamics.get("ke_max", {})
+        self.kc_max = dynamics.get("kc_max", {})
         self.gwsub_data = dynamics.get("gwsub", {})
 
         # Date range from container
@@ -581,6 +582,37 @@ class PestBuilder:
             etf_nonzero = int((nonzero_w & etf_mask.values).sum())
             etf_valid = int((valid_obs & etf_mask.values).sum())
             print(f"ETf: valid={etf_valid}, nonzero_weight={etf_nonzero}")
+
+            # Per-site ETf weight share
+            etf_obs = obs[etf_mask].copy()
+            etf_w = w[etf_mask]
+            total_etf_w = etf_w.sum()
+            if total_etf_w > 0:
+                # Extract site ID from obs name: oname:obs_etf_{fid}_otype:...
+                site_ids = etf_obs.index.to_series().str.extract(
+                    r"oname:obs_etf_(.+?)_otype:", expand=False
+                )
+                site_w = etf_w.groupby(site_ids).sum()
+                site_share = (site_w / total_etf_w * 100).sort_values(ascending=False)
+                site_count = (etf_w > 0).groupby(site_ids).sum()
+                site_total = site_ids.groupby(site_ids).count()
+
+                print("\nETf per-site weight share (top 10):")
+                for sid in site_share.head(10).index:
+                    pct = site_share[sid]
+                    nz = int(site_count.get(sid, 0))
+                    tot = int(site_total.get(sid, 0))
+                    print(f"  {sid:30s}  {pct:5.1f}%  ({nz}/{tot} obs)")
+
+                # Warn about sites with heavy pruning
+                pruned = site_count[site_count < site_total * 0.3]
+                if len(pruned) > 0:
+                    print(f"\nWARNING: {len(pruned)} sites have >70% ETf obs zeroed:")
+                    for sid in pruned.index:
+                        nz = int(pruned[sid])
+                        tot = int(site_total[sid])
+                        print(f"  {sid}: {nz}/{tot} remaining ({100 * nz / tot:.0f}%)")
+
         if swe_mask.any():
             swe_nonzero = int((nonzero_w & swe_mask.values).sum())
             swe_valid = int((valid_obs & swe_mask.values).sum())
@@ -761,7 +793,7 @@ if __name__ == "__main__":
 
         Writes loc.mat and localizer_summary.json to the pest directory.
         """
-        et_params = ["aw", "ndvi_k", "ndvi_0", "mad", "kr_alpha", "ks_alpha"]
+        et_params = ["aw", "ndvi_k", "ndvi_0", "mad", "kr_alpha", "ks_alpha", "m_kc"]
         snow_params = ["swe_alpha", "swe_beta"]
 
         par_relation = {"etf": et_params, "swe": snow_params}
@@ -970,6 +1002,18 @@ if __name__ == "__main__":
                     "use_cols": 1,
                     "use_rows": None,
                 },
+                # kc_max multiplier (kc_max_eff = kc_max_base × m_kc)
+                "m_kc": {
+                    "file": self.params_file,
+                    "std": 0.05,
+                    "initial_value": 1.0,
+                    "lower_bound": 0.85,
+                    "upper_bound": 1.25,
+                    "pargp": "m_kc",
+                    "index_cols": 0,
+                    "use_cols": 1,
+                    "use_rows": None,
+                },
             }
         )
 
@@ -1094,6 +1138,7 @@ if __name__ == "__main__":
             start_date=self.config.start_dt,
             end_date=self.config.end_dt,
             refet_type=getattr(self.config, "refet_type", "eto") or "eto",
+            empirical_kc_max=True,
         )
 
         if self.verbose:
@@ -1271,9 +1316,8 @@ if __name__ == "__main__":
                 self._drop_conflicts(i, fid)
 
         # Diagnostic warning: detect if all ETf observations got zero weights
-        total_nonzero_etf = sum(
-            (df["weight"] > 0).sum() for df in self.pest.obs_dfs[: len(self.pest_args["targets"])]
-        )
+        n_targets = len(self.pest_args["targets"])
+        total_nonzero_etf = sum((df["weight"] > 0).sum() for df in self.pest.obs_dfs[:n_targets])
         if total_valid_obs > 0 and total_nonzero_etf == 0:
             warnings.warn(
                 f"All {total_valid_obs} ETf observations have zero weight. "
