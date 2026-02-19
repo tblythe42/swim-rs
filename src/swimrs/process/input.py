@@ -823,12 +823,13 @@ def _write_properties_from_container(
     ke_max_data = dynamics.get("ke_max", {})
     ke_max = np.array([ke_max_data.get(fid, 1.0) for fid in fids])
 
-    # kc_max: empirical > fixed FAO-56 default
+    # kc_max: empirical > fixed FAO-56 default, floor 1.35
     if empirical_kc_max:
         kc_max_data = dynamics.get("kc_max", {})
-        kc_max = np.array([kc_max_data.get(fid, 1.2) for fid in fids])
+        kc_max = np.array([kc_max_data.get(fid, 1.35) for fid in fids])
+        kc_max = np.maximum(kc_max, 1.35)
     else:
-        kc_max = np.full(n_fields, 1.2)
+        kc_max = np.full(n_fields, 1.35)
 
     # f_sub
     if calibrated_params is not None and "f_sub" in calibrated_params:
@@ -923,7 +924,7 @@ def _write_parameters_from_container(
     swe_beta = np.full(n_fields, 2.0)
     kr_damp = np.full(n_fields, 0.2)
     ks_damp = np.full(n_fields, 0.2)
-    max_irr_rate = np.full(n_fields, 25.0)
+    max_irr_rate = np.full(n_fields, 100.0)
 
     # Override with calibrated values
     if calibrated_params is not None:
@@ -1107,7 +1108,7 @@ def _write_irrigation_from_container(
     ts = container_data.get("time_series")
     if ts is not None:
         ndvi_var = None
-        for var in ["ndvi_irr", "ndvi_inv_irr"]:
+        for var in ["ndvi_no_mask", "ndvi_irr", "ndvi_inv_irr"]:
             if var in ts:
                 ndvi_var = var
                 break
