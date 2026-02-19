@@ -560,13 +560,13 @@ class Calculator(Component):
                 ke_max = 1.0
                 self._log.debug("no_low_ndvi", site=site_str)
 
-            # kc_max: 90th percentile of ALL ETf observations, with floor of 1.25
+            # kc_max: 90th percentile of ALL ETf observations, with floor of 1.35
             # (does NOT require NDVI to be present)
             all_etf_obs = site_etf.dropna().values
             if len(all_etf_obs) > 0:
-                kc_max = max(float(np.percentile(all_etf_obs, 90)), 1.25)
+                kc_max = max(float(np.percentile(all_etf_obs, 90)), 1.35)
             else:
-                kc_max = 1.25
+                kc_max = 1.35
 
             results_ke[site_str] = ke_max
             results_kc[site_str] = kc_max

@@ -490,7 +490,7 @@ class CalibrationParameters:
         if self.ks_damp is None:
             self.ks_damp = np.full(n, 0.2, dtype=np.float64)
         if self.max_irr_rate is None:
-            self.max_irr_rate = np.full(n, 25.0, dtype=np.float64)
+            self.max_irr_rate = np.full(n, 100.0, dtype=np.float64)
 
     @classmethod
     def from_base_with_multipliers(

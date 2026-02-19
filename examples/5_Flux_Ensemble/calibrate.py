@@ -48,11 +48,26 @@ def run_pest_sequence(
         container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
     container = SwimContainer.open(container_path, mode="r")
 
-    # Guardrail: assert Landsat NDVI exists before calibration
-    for mask in ("irr", "inv_irr", "no_mask"):
-        key = f"remote_sensing/ndvi/landsat/{mask}"
-        if key not in container._root:
-            raise RuntimeError(f"Missing Landsat NDVI ({mask}) in container — cannot calibrate")
+    # Guardrail: validate NDVI and ETf masks match mask_mode before calibration
+    mask_mode = getattr(cfg, "mask_mode", "irrigation")
+    required_masks = ["no_mask"] if mask_mode == "none" else ["irr", "inv_irr"]
+
+    for mask in required_masks:
+        ndvi_key = f"remote_sensing/ndvi/landsat/{mask}"
+        if ndvi_key not in container._root:
+            raise RuntimeError(
+                f"Missing Landsat NDVI ({mask}) for mask_mode={mask_mode!r} — cannot calibrate"
+            )
+
+    etf_model = cfg.etf_target_model
+    models = cfg.etf_ensemble_members if etf_model == "ensemble" else [etf_model]
+    for model in models:
+        for mask in required_masks:
+            etf_key = f"remote_sensing/etf/landsat/{model}/{mask}"
+            if etf_key not in container._root:
+                raise RuntimeError(
+                    f"Missing ETf {model}/{mask} for mask_mode={mask_mode!r} — cannot calibrate"
+                )
 
     builder = PestBuilder(
         cfg,
@@ -125,8 +140,8 @@ def run_pest_sequence(
     )
 
     for fname in [
-        f"{project}.3.par.csv",
-        f"{project}.2.par.csv",
+        f"{project}.{noptmax}.par.csv",
+        f"{project}.{noptmax - 1}.par.csv",
         f"{project}.phi.meas.csv",
         f"{project}.pdc.csv",
         f"{project}.idx.csv",
@@ -145,10 +160,10 @@ if __name__ == "__main__":
 
     cfg = _load_config()
 
-    # Run 8: no_mask NDVI/ETf, 8-param, 6-model ensemble
+    # Run 10: fix irr_flag NDVI fallback for no_mask, kc_max=1.35, irr=100
     DEBUG_FIELDS = None
 
-    results = os.path.join(cfg.project_ws, "results", "run8_no_mkc")
+    results = os.path.join(cfg.project_ws, "results", "run10_irr_flag_fix")
     t0 = time.time()
     run_pest_sequence(
         cfg,
