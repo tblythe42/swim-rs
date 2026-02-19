@@ -620,7 +620,7 @@ class GridMet(Thredds):
         date_ind = self._date_index()
         subset["time"] = date_ind
         time = subset["time"].values
-        series = subset[self.kwords[self.variable]].values
+        series = np.atleast_1d(subset[self.kwords[self.variable]].values.squeeze())
         df = DataFrame(data=series, index=time)
         df.columns = [self.variable]
         return df
@@ -630,7 +630,7 @@ class GridMet(Thredds):
         url = url + "#fillmismatch"
         xray = open_dataset(url)
         subset = xray.sel(lon=self.lon, lat=self.lat, method="nearest")
-        elev = subset.get("elevation").values[0]
+        elev = float(subset.get("elevation").values.squeeze())
         return elev
 
     def _build_url(self) -> str:

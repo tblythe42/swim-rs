@@ -750,6 +750,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
             etf_model=getattr(config, "etf_target_model", "ssebop"),
             met_source=getattr(config, "met_source", "gridmet"),
             fields=fields,
+            mask_mode=getattr(config, "mask_mode", "irrigation"),
         )
 
         targets = swim_input.fids

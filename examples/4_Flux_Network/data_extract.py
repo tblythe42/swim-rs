@@ -96,7 +96,7 @@ def extract_ndvi(cfg: ProjectConfig, sites=None, get_sentinel: bool = True) -> N
     is_authorized()
     from swimrs.data_extraction.ee.ndvi_export import sparse_sample_ndvi
 
-    for mask in ["irr", "inv_irr"]:
+    for mask in ["irr", "inv_irr", "no_mask"]:
         dst = os.path.join(cfg.landsat_dir, "extracts", "ndvi", mask)
         sparse_sample_ndvi(
             cfg.fields_shapefile,

@@ -39,6 +39,7 @@ dependencies = [
   "filelock",
   "tqdm",
   "pyarrow",
+  "netcdf4>=1.7.4",
 ]
 
 [project.optional-dependencies]

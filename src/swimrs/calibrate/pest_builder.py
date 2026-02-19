@@ -94,7 +94,11 @@ class PestBuilder:
 
         self.observation_index = {}
 
-        self.masks = ["inv_irr", "irr", "no_mask"]
+        mask_mode = getattr(self.config, "mask_mode", "irrigation")
+        if mask_mode == "none":
+            self.masks = ["no_mask"]
+        else:
+            self.masks = ["inv_irr", "irr"]
 
         self.pest = None
         self.etf_std = None
@@ -196,7 +200,7 @@ class PestBuilder:
             ensemble_source = getattr(self.config, "ensemble_source", "computed")
             if ensemble_source == "openet":
                 # Use OpenET's pre-computed ensemble directly from the container
-                for mask in ["irr", "inv_irr"]:
+                for mask in self.masks:
                     path = f"remote_sensing/etf/landsat/ensemble/{mask}"
                     if path in self._container.state.root:
                         df = self._container.query.dataframe(path, fields=[fid])
@@ -208,7 +212,7 @@ class PestBuilder:
                 if not available_models:
                     return result
 
-                for mask in ["irr", "inv_irr"]:
+                for mask in self.masks:
                     mask_data = []
                     for m in available_models:
                         path = f"remote_sensing/etf/landsat/{m}/{mask}"
@@ -221,7 +225,7 @@ class PestBuilder:
                         combined = pd.concat(mask_data, axis=1)
                         result[f"ensemble_etf_{mask}"] = combined.mean(axis=1)
         else:
-            for mask in ["irr", "inv_irr"]:
+            for mask in self.masks:
                 path = f"remote_sensing/etf/landsat/{model}/{mask}"
                 if path in self._container.state.root:
                     df = self._container.query.dataframe(path, fields=[fid])
@@ -237,7 +241,7 @@ class PestBuilder:
 
         for model in known_models:
             # Check if at least one mask exists for this model
-            for mask in ["irr", "inv_irr"]:
+            for mask in self.masks:
                 path = f"remote_sensing/etf/landsat/{model}/{mask}"
                 if path in self._container.state.root:
                     available.append(model)
@@ -503,8 +507,7 @@ class PestBuilder:
         # Limit export to the current target set (supports debug_fields slicing).
         fields = list(self.pest_args.get("targets", self.plot_order))
 
-        # Always include no_mask so international workflows can export observations.
-        masks = ("irr", "inv_irr", "no_mask")
+        masks = tuple(self.masks)
 
         start_date = (
             self.config.start_dt.date().isoformat()
@@ -1050,6 +1053,7 @@ if __name__ == "__main__":
                 start_date=self.config.start_dt,
                 end_date=self.config.end_dt,
                 refet_type=getattr(self.config, "refet_type", "eto") or "eto",
+                mask_mode=getattr(self.config, "mask_mode", "irrigation"),
             )
 
             # Run simulation to generate spinup state (uses fast JIT loop)
@@ -1127,6 +1131,7 @@ if __name__ == "__main__":
             end_date=self.config.end_dt,
             refet_type=getattr(self.config, "refet_type", "eto") or "eto",
             empirical_kc_max=True,
+            mask_mode=getattr(self.config, "mask_mode", "irrigation"),
         )
 
         if self.verbose:
@@ -1303,15 +1308,19 @@ if __name__ == "__main__":
             if self.conflicted_obs:
                 self._drop_conflicts(i, fid)
 
-        # Diagnostic warning: detect if all ETf observations got zero weights
+        # Hard check: ensure calibration has usable ETf observations
         n_targets = len(self.pest_args["targets"])
         total_nonzero_etf = sum((df["weight"] > 0).sum() for df in self.pest.obs_dfs[:n_targets])
-        if total_valid_obs > 0 and total_nonzero_etf == 0:
-            warnings.warn(
+        if total_valid_obs == 0:
+            raise RuntimeError(
+                "No valid ETf observations found for any field. "
+                f"Checked masks={self.masks}. "
+                "Verify that the container has ETf data for the requested mask_mode."
+            )
+        if total_nonzero_etf == 0:
+            raise RuntimeError(
                 f"All {total_valid_obs} ETf observations have zero weight. "
-                "Check etf_std index alignment with capture_dates.",
-                UserWarning,
-                stacklevel=2,
+                "Check etf_std index alignment with capture_dates."
             )
 
         return i

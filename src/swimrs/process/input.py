@@ -444,6 +444,7 @@ def build_swim_input(
     met_source: str = "gridmet",
     fields: list[str] | None = None,
     empirical_kc_max: bool = False,
+    mask_mode: str = "irrigation",
 ) -> SwimInput:
     """Build HDF5 input file from SwimContainer.
 
@@ -478,6 +479,10 @@ def build_swim_input(
     empirical_kc_max : bool
         If True, use empirical kc_max from container (90th percentile ETf).
         If False (default), use fixed FAO-56 value of 1.2.
+    mask_mode : str
+        NDVI masking strategy: ``"none"`` uses only ``no_mask`` NDVI,
+        ``"irrigation"`` uses ``irr``/``inv_irr`` with year-based switching.
+        Raises if the requested NDVI mask is not in the container.
 
     Returns
     -------
@@ -517,7 +522,14 @@ def build_swim_input(
 
     # Extract data from container using its export infrastructure
     container_data = _extract_from_container(
-        container, fids, start_date, end_date, etf_model, met_source, refet_type
+        container,
+        fids,
+        start_date,
+        end_date,
+        etf_model,
+        met_source,
+        refet_type,
+        mask_mode,
     )
 
     refet_type = (refet_type or "eto").lower().strip()
@@ -603,6 +615,7 @@ def _extract_from_container(
     etf_model: str,
     met_source: str,
     refet_type: str,
+    mask_mode: str = "irrigation",
 ) -> dict[str, Any]:
     """Extract all required data from SwimContainer.
 
@@ -622,7 +635,14 @@ def _extract_from_container(
 
     # Build time series dataset
     time_series = _get_container_time_series(
-        container, fids, start_date, end_date, etf_model, met_source, refet_type
+        container,
+        fids,
+        start_date,
+        end_date,
+        etf_model,
+        met_source,
+        refet_type,
+        mask_mode,
     )
 
     return {
@@ -640,6 +660,7 @@ def _get_container_time_series(
     etf_model: str,
     met_source: str,
     refet_type: str,
+    mask_mode: str = "irrigation",
 ) -> Any:
     """Get time series data from container as xarray Dataset."""
 
@@ -671,14 +692,29 @@ def _get_container_time_series(
             paths["swe_obs"] = swe_path
             break
 
-    # NDVI - prefer merged, try both masks
-    for mask in ["irr", "inv_irr"]:
+    # NDVI - load only the masks required by mask_mode
+    if mask_mode == "none":
+        ndvi_masks = ["no_mask"]
+    else:
+        ndvi_masks = ["irr", "inv_irr"]
+
+    ndvi_found = False
+    for mask in ndvi_masks:
         merged_path = f"derived/merged_ndvi/{mask}"
         raw_path = f"remote_sensing/ndvi/landsat/{mask}"
         if merged_path in root:
             paths[f"ndvi_{mask}"] = merged_path
+            ndvi_found = True
         elif raw_path in root:
             paths[f"ndvi_{mask}"] = raw_path
+            ndvi_found = True
+
+    if not ndvi_found:
+        raise RuntimeError(
+            f"No NDVI data found for mask_mode={mask_mode!r} "
+            f"(looked for masks {ndvi_masks}). "
+            f"Ingest the required NDVI mask into the container."
+        )
 
     if not paths:
         return None
@@ -980,43 +1016,46 @@ def _write_time_series_from_container(
                 compression="gzip",
             )
 
-    # NDVI - handle irr/inv_irr switching based on irrigation status
+    # NDVI - handle mask switching based on available data
     dynamics = container_data["dynamics"]
     irr_data = dynamics.get("irr", {})
 
-    # Start with non-irrigated NDVI as base
-    if "ndvi_inv_irr" in ds:
+    if "ndvi_no_mask" in ds:
+        # no_mask mode — use unmasked NDVI directly
+        ndvi_arr = ds["ndvi_no_mask"].values.copy()
+    elif "ndvi_inv_irr" in ds:
+        # irrigation mode — base on inv_irr, switch to irr for irrigated years
         ndvi_arr = ds["ndvi_inv_irr"].values.copy()
+
+        if "ndvi_irr" in ds:
+            ndvi_irr = ds["ndvi_irr"].values
+            time_index = pd.DatetimeIndex(ds.coords["time"].values)
+
+            for fid_idx, fid in enumerate(fids):
+                if fid not in irr_data:
+                    continue
+
+                irr_years = []
+                for k, v in irr_data[fid].items():
+                    if k == "fallow_years":
+                        continue
+                    try:
+                        if isinstance(v, dict) and v.get("f_irr", 0.0) >= 0.1:
+                            irr_years.append(int(k))
+                    except (ValueError, TypeError):
+                        continue
+
+                if irr_years:
+                    year_array = time_index.year
+                    for yr in irr_years:
+                        yr_mask = year_array == yr
+                        ndvi_arr[yr_mask, fid_idx] = ndvi_irr[yr_mask, fid_idx]
     elif "ndvi_irr" in ds:
         ndvi_arr = ds["ndvi_irr"].values.copy()
     else:
-        ndvi_arr = np.zeros((n_days, n_fields), dtype=np.float64)
-
-    # Switch to irrigated NDVI for irrigated years
-    if "ndvi_irr" in ds:
-        ndvi_irr = ds["ndvi_irr"].values
-        time_index = pd.DatetimeIndex(ds.coords["time"].values)
-
-        for fid_idx, fid in enumerate(fids):
-            if fid not in irr_data:
-                continue
-
-            # Find irrigated years
-            irr_years = []
-            for k, v in irr_data[fid].items():
-                if k == "fallow_years":
-                    continue
-                try:
-                    if isinstance(v, dict) and v.get("f_irr", 0.0) >= 0.1:
-                        irr_years.append(int(k))
-                except (ValueError, TypeError):
-                    continue
-
-            if irr_years:
-                year_array = time_index.year
-                for yr in irr_years:
-                    yr_mask = year_array == yr
-                    ndvi_arr[yr_mask, fid_idx] = ndvi_irr[yr_mask, fid_idx]
+        raise RuntimeError(
+            "No NDVI data found in time series dataset. Check mask_mode and container contents."
+        )
 
     ts_group.create_dataset("ndvi", data=ndvi_arr, compression="gzip")
 

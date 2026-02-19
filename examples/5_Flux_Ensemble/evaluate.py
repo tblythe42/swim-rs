@@ -36,7 +36,6 @@ VOLK_COLUMN_MAP = {
     "EEMETRIC_3x3": "eemetric",
     "DISALEXI_3x3": "disalexi",
 }
-IRR_THRESHOLD = 0.3
 
 
 def load_config():
@@ -96,6 +95,7 @@ def run_calibrated_model(cfg, container, fids, calibrated_params):
             refet_type=getattr(cfg, "refet_type", "eto") or "eto",
             fields=fids,
             empirical_kc_max=True,
+            mask_mode=getattr(cfg, "mask_mode", "irrigation"),
         )
 
         output, _ = run_daily_loop_fast(swim_input)
@@ -144,71 +144,12 @@ def load_openet_etf_nomask(container, fid):
         etf_path = f"remote_sensing/etf/landsat/{model}/no_mask"
         try:
             etf_df = container.query.dataframe(etf_path, fields=[fid])
-            if fid in etf_df.columns:
-                series = etf_df[fid]
-                if series.notna().any():
-                    etf_by_model[model] = series
-        except Exception:
-            pass
-    return etf_by_model
-
-
-def load_openet_etf(container, fid, irr_data):
-    """Load per-model ETf from the container and select irr/inv_irr mask by year.
-
-    Returns {model_name: pd.Series} of ETf values with year-appropriate mask applied.
-    """
-    field_irr = irr_data.get(fid, {})
-    irr_years = set()
-    for k, v in field_irr.items():
-        if k == "fallow_years":
+        except KeyError:
             continue
-        try:
-            if isinstance(v, dict) and v.get("f_irr", 0.0) >= IRR_THRESHOLD:
-                irr_years.add(int(k))
-        except (ValueError, TypeError):
-            continue
-
-    etf_by_model = {}
-    for model in OPEN_SOURCE_MODELS:
-        # Load both masks
-        etf_inv = etf_irr = None
-        for mask in ["inv_irr", "irr"]:
-            etf_path = f"remote_sensing/etf/landsat/{model}/{mask}"
-            try:
-                etf_df = container.query.dataframe(etf_path, fields=[fid])
-                if fid in etf_df.columns:
-                    series = etf_df[fid]
-                    if mask == "inv_irr":
-                        etf_inv = series
-                    else:
-                        etf_irr = series
-            except Exception:
-                pass
-
-        # Treat all-NaN series as missing
-        inv_valid = etf_inv is not None and etf_inv.notna().any()
-        irr_valid = etf_irr is not None and etf_irr.notna().any()
-
-        if not inv_valid and not irr_valid:
-            continue
-
-        # Default to inv_irr, switch to irr for irrigated years
-        if inv_valid:
-            combined = etf_inv.copy()
-        else:
-            combined = pd.Series(np.nan, index=etf_irr.index)
-
-        if irr_valid and irr_years:
-            irr_mask = combined.index.year.isin(irr_years)
-            combined.loc[irr_mask] = etf_irr.loc[irr_mask]
-
-        # If inv_irr had no valid data, fall back entirely to irr
-        if not inv_valid and irr_valid:
-            combined = etf_irr.copy()
-
-        etf_by_model[model] = combined
-
+        if fid in etf_df.columns:
+            series = etf_df[fid]
+            if series.notna().any():
+                etf_by_model[model] = series
     return etf_by_model
 
 
@@ -251,14 +192,11 @@ def calc_metrics(obs, mod):
 def _get_diy_openet(container, fid, irr_data, etref):
     """DIY: interpolate our sparse ETf to daily, then multiply by daily ETo.
 
-    Tries no_mask ETf first (unmasked, for fair OpenET comparison), then
-    falls back to irr/inv_irr masked ETf.
+    Uses no_mask ETf exclusively — no fallback to masked ETf.
 
     Returns {model_name: pd.Series} of daily ET (interpolated ETf × ETo).
     """
     etf_by_model = load_openet_etf_nomask(container, fid)
-    if not etf_by_model:
-        etf_by_model = load_openet_etf(container, fid, irr_data)
     et_daily = {}
     for model_name, etf_series in etf_by_model.items():
         etf_interp = etf_series.interpolate(method="linear")
@@ -378,15 +316,13 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
             ensemble_source = getattr(cfg, "ensemble_source", "computed")
             if ensemble_source == "openet":
                 ens_etf = None
-                for mask in ["no_mask", "inv_irr", "irr"]:
-                    ens_path = f"remote_sensing/etf/landsat/ensemble/{mask}"
-                    try:
-                        ens_df = container.query.dataframe(ens_path, fields=[fid])
-                        if fid in ens_df.columns and ens_df[fid].notna().any():
-                            ens_etf = ens_df[fid]
-                            break
-                    except Exception:
-                        pass
+                ens_path = "remote_sensing/etf/landsat/ensemble/no_mask"
+                try:
+                    ens_df = container.query.dataframe(ens_path, fields=[fid])
+                    if fid in ens_df.columns and ens_df[fid].notna().any():
+                        ens_etf = ens_df[fid]
+                except KeyError:
+                    pass
                 if ens_etf is not None:
                     ens_et_daily = ens_etf.interpolate(method="linear") * etref
                     ens_on_common = ens_et_daily.reindex(common)
@@ -459,73 +395,18 @@ def evaluate_etf(cfg, container, par_csv, fids):
     calibrated_params = parse_pest_params(par_csv, fids)
     model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
 
-    # Load irrigation data for mask selection
-    irr_data = {}
-    try:
-        props = container.query.properties()
-        for fid in fids:
-            if fid in props and "irr" in props[fid]:
-                irr_data[fid] = props[fid]["irr"]
-    except Exception:
-        pass
-
     rows = []
     for fid in fids:
         if fid not in model_results:
             continue
         swim_etf = model_results[fid]["etf_model"]
 
-        # Determine irrigated years for mask selection
-        field_irr = irr_data.get(fid, {})
-        irr_years = set()
-        for k, v in field_irr.items():
-            if k == "fallow_years":
-                continue
-            try:
-                if isinstance(v, dict) and v.get("f_irr", 0.0) >= IRR_THRESHOLD:
-                    irr_years.add(int(k))
-            except (ValueError, TypeError):
-                continue
-
-        # Try no_mask ETf first for this field
         nomask_etf = load_openet_etf_nomask(container, fid)
 
         for model in OPEN_SOURCE_MODELS:
-            # Prefer no_mask ETf; fall back to irr/inv_irr masked
-            if model in nomask_etf:
-                combined = nomask_etf[model]
-            else:
-                etf_inv = etf_irr = None
-                for mask in ["inv_irr", "irr"]:
-                    path = f"remote_sensing/etf/landsat/{model}/{mask}"
-                    try:
-                        etf_df = container.query.dataframe(path, fields=[fid])
-                        if fid in etf_df.columns:
-                            series = etf_df[fid]
-                            if mask == "inv_irr":
-                                etf_inv = series
-                            else:
-                                etf_irr = series
-                    except Exception:
-                        pass
-
-                if etf_inv is None and etf_irr is None:
-                    continue
-
-                inv_valid = etf_inv is not None and etf_inv.dropna().any()
-                irr_valid = etf_irr is not None and etf_irr.dropna().any()
-
-                if inv_valid and irr_valid:
-                    combined = etf_inv.copy()
-                    if irr_years:
-                        irr_mask = combined.index.year.isin(irr_years)
-                        combined.loc[irr_mask] = etf_irr.loc[irr_mask]
-                elif irr_valid:
-                    combined = etf_irr
-                elif inv_valid:
-                    combined = etf_inv
-                else:
-                    continue
+            if model not in nomask_etf:
+                continue
+            combined = nomask_etf[model]
 
             obs_etf = combined.dropna()
             obs_etf = obs_etf[obs_etf > 0]

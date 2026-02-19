@@ -516,12 +516,22 @@ class Exporter(Component):
         - Start with inv_irr (non-irrigated) mask as base
         - For years where f_irr >= irr_threshold, use irr mask
         """
-        # Determine base mask (prefer inv_irr, fall back to no_mask or irr)
-        if "inv_irr" in etf_data:
+        # Only consider masks that were requested
+        available = [m for m in masks if m in etf_data]
+        if not available:
+            return None
+
+        if "no_mask" in available and len(available) == 1:
+            # Strict no_mask mode — use unmasked ETf directly, no switching
+            try:
+                return etf_data["no_mask"].sel(site=fid).values.copy()
+            except KeyError:
+                return None
+
+        # Irrigation mode — base on inv_irr, switch to irr for irrigated years
+        if "inv_irr" in available:
             base_mask = "inv_irr"
-        elif "no_mask" in etf_data:
-            base_mask = "no_mask"
-        elif "irr" in etf_data:
+        elif "irr" in available:
             base_mask = "irr"
         else:
             return None
@@ -531,11 +541,9 @@ class Exporter(Component):
         except KeyError:
             return None
 
-        # Switch to irrigated mask for irrigated years
-        if "irr" in etf_data and fid in irr_data:
+        if "irr" in available and fid in irr_data:
             field_irr = irr_data[fid]
 
-            # Find irrigated years
             irr_years = []
             for k, v in field_irr.items():
                 if k == "fallow_years":
@@ -546,7 +554,6 @@ class Exporter(Component):
                 except (ValueError, TypeError):
                     continue
 
-            # Switch mask for irrigated years
             if irr_years:
                 try:
                     irr_etf = etf_data["irr"].sel(site=fid).values

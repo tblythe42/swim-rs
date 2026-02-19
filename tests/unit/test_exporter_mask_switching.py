@@ -1,8 +1,8 @@
 """Tests for Exporter._build_switched_etf() mask switching logic.
 
 Tests cover:
-- Base mask preference order: inv_irr > no_mask > irr > None
-- Irrigated year switches to irr mask
+- Irrigation mode: inv_irr base, switch to irr for irrigated years
+- no_mask mode: use no_mask directly, no switching
 - Non-irrigated year keeps base mask
 - fallow_years key skipped
 - Missing field returns None
@@ -62,8 +62,8 @@ class TestBuildSwitchedEtf:
         # Should be inv_irr values since field not irrigated
         assert np.allclose(result, 0.5)
 
-    def test_no_mask_fallback(self, dates, time_index):
-        """no_mask is used when inv_irr not available."""
+    def test_no_mask_only(self, dates, time_index):
+        """no_mask mode uses no_mask directly, ignores other masks."""
         exp = _make_exporter()
         n = len(dates)
         etf_data = {
@@ -71,9 +71,8 @@ class TestBuildSwitchedEtf:
             "irr": _make_etf_da(np.full((n, 1), 0.9), dates, ["A"]),
         }
         irr_data = {}
-        result = exp._build_switched_etf(
-            "A", etf_data, irr_data, ("irr", "no_mask"), 0.1, time_index
-        )
+        # Only no_mask requested — should use it directly
+        result = exp._build_switched_etf("A", etf_data, irr_data, ("no_mask",), 0.1, time_index)
         assert result is not None
         assert np.allclose(result, 0.6)
 

@@ -190,7 +190,7 @@ def ingest_remote_sensing(
     """
     print("\n=== Ingesting Remote Sensing ===")
 
-    masks = ["irr", "inv_irr"]
+    masks = ["irr", "inv_irr", "no_mask"]
     etf_masks = ["irr", "inv_irr", "no_mask"]
     # SSEBop NHM is the sole ETf model for this example
     models = [cfg.etf_target_model]
@@ -304,7 +304,7 @@ def compute_fused_ndvi(container: SwimContainer, overwrite: bool = False):
     print("\n=== Computing Fused NDVI ===")
 
     container.compute.fused_ndvi(
-        masks=("irr", "inv_irr"),
+        masks=("irr", "inv_irr", "no_mask"),
         overwrite=overwrite,
     )
 
@@ -322,7 +322,7 @@ def compute_dynamics(container: SwimContainer, cfg: ProjectConfig, overwrite: bo
 
     container.compute.dynamics(
         etf_model=cfg.etf_target_model,
-        masks=("irr", "inv_irr"),
+        masks=("irr", "inv_irr", "no_mask"),
         irr_threshold=cfg.irrigation_threshold or 0.3,
         use_mask=True,
         use_lulc=False,
