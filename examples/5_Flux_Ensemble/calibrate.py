@@ -160,10 +160,10 @@ if __name__ == "__main__":
 
     cfg = _load_config()
 
-    # Run 10: fix irr_flag NDVI fallback for no_mask, kc_max=1.35, irr=100
+    # Run 11: 1995-2025 container, irr_flag fix, kc_max=1.35, irr=100
     DEBUG_FIELDS = None
 
-    results = os.path.join(cfg.project_ws, "results", "run10_irr_flag_fix")
+    results = os.path.join(cfg.project_ws, "results", "run11_full_period")
     t0 = time.time()
     run_pest_sequence(
         cfg,
