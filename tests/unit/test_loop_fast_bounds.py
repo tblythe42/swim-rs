@@ -43,8 +43,6 @@ def _make_inputs(*, n_days=N_DAYS, n_fields=N_FIELDS, **overrides):
         gw_status=np.zeros(n_fields),
         ke_max=np.full(n_fields, 1.2),
         f_sub=np.zeros(n_fields),
-        ndvi_bare=np.full(n_fields, 0.15),
-        ndvi_full=np.full(n_fields, 0.85),
         # Parameters (n_fields,)
         kc_max=np.full(n_fields, 1.25),
         kc_min=np.full(n_fields, 0.15),

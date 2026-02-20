@@ -182,8 +182,6 @@ class SwimInput:
             ke_max=props["ke_max"][:] if "ke_max" in props else None,
             kc_max=props["kc_max"][:] if "kc_max" in props else None,
             f_sub=props["f_sub"][:] if "f_sub" in props else None,
-            ndvi_bare=props["ndvi_bare"][:] if "ndvi_bare" in props else None,
-            ndvi_full=props["ndvi_full"][:] if "ndvi_full" in props else None,
         )
 
     def _load_parameters(self, h5: h5py.File) -> CalibrationParameters:
@@ -849,26 +847,6 @@ def _write_properties_from_container(
                 f_sub_values.append(0.0)
         f_sub = np.array(f_sub_values)
 
-    # NDVI thresholds for fc calculation - Carlson & Ripley (1997)
-    # Compute site-specific percentiles from NDVI time series
-    ts = container_data.get("time_series")
-    ndvi_bare = np.full(n_fields, 0.15)  # Default bare soil NDVI
-    ndvi_full = np.full(n_fields, 0.85)  # Default full cover NDVI
-    if ts is not None:
-        # Try to get NDVI from time series (prefer non-irrigated mask)
-        ndvi_data = None
-        for var in ["ndvi_no_mask", "ndvi_inv_irr", "ndvi_irr"]:
-            if var in ts:
-                ndvi_data = ts[var].values
-                break
-        if ndvi_data is not None:
-            for i in range(n_fields):
-                valid = ndvi_data[:, i]
-                valid = valid[np.isfinite(valid)]
-                if len(valid) > 10:  # Need sufficient data
-                    ndvi_bare[i] = np.percentile(valid, 5)
-                    ndvi_full[i] = np.percentile(valid, 95)
-
     # Write datasets
     props_group.create_dataset("awc", data=awc)
     props_group.create_dataset("ksat", data=ksat)
@@ -884,8 +862,6 @@ def _write_properties_from_container(
     props_group.create_dataset("ke_max", data=ke_max)
     props_group.create_dataset("kc_max", data=kc_max)
     props_group.create_dataset("f_sub", data=f_sub)
-    props_group.create_dataset("ndvi_bare", data=ndvi_bare)
-    props_group.create_dataset("ndvi_full", data=ndvi_full)
 
 
 def _write_parameters_from_container(

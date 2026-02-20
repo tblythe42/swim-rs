@@ -48,8 +48,6 @@ def _run_loop_jit(
     gw_status: np.ndarray,
     ke_max: np.ndarray,
     f_sub: np.ndarray,
-    ndvi_bare: np.ndarray,
-    ndvi_full: np.ndarray,
     # Parameters: (n_fields,)
     kc_max: np.ndarray,
     kc_min: np.ndarray,
@@ -624,16 +622,6 @@ def run_daily_loop_fast(
         props.kc_max.astype(np.float64) if props.kc_max is not None else np.full(n_fields, 1.25)
     )
     f_sub = props.f_sub.astype(np.float64) if props.f_sub is not None else np.zeros(n_fields)
-    ndvi_bare = (
-        props.ndvi_bare.astype(np.float64)
-        if props.ndvi_bare is not None
-        else np.full(n_fields, 0.15)
-    )
-    ndvi_full = (
-        props.ndvi_full.astype(np.float64)
-        if props.ndvi_full is not None
-        else np.full(n_fields, 0.85)
-    )
 
     # Extract parameter arrays
     kc_min = params.kc_min.astype(np.float64)
@@ -725,8 +713,6 @@ def run_daily_loop_fast(
         gw_status,
         ke_max,
         f_sub,
-        ndvi_bare,
-        ndvi_full,
         kc_max,
         kc_min,
         ndvi_k,
