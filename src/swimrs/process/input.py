@@ -857,7 +857,7 @@ def _write_properties_from_container(
     if ts is not None:
         # Try to get NDVI from time series (prefer non-irrigated mask)
         ndvi_data = None
-        for var in ["ndvi_inv_irr", "ndvi_irr"]:
+        for var in ["ndvi_no_mask", "ndvi_inv_irr", "ndvi_irr"]:
             if var in ts:
                 ndvi_data = ts[var].values
                 break

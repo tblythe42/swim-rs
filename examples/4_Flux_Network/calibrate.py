@@ -33,6 +33,7 @@ def run_pest_sequence(
     results_dir: str,
     pdc_remove: bool = False,
     debug_fields: list[str] | None = None,
+    exclude_fields: list[str] | None = None,
     ies_num_threads: int | None = None,
     container_path: str | None = None,
 ):
@@ -61,6 +62,13 @@ def run_pest_sequence(
         python_script=getattr(cfg, "python_script", None),
         conflicted_obs=None,
     )
+
+    if exclude_fields:
+        before = len(builder.plot_order)
+        builder.plot_order = [f for f in builder.plot_order if f not in exclude_fields]
+        builder.pest_args = builder.get_pest_builder_args()
+        print(f"Excluded {before - len(builder.plot_order)} fields: {exclude_fields}")
+        print(f"Calibrating {len(builder.plot_order)} fields")
 
     if debug_fields is not None:
         missing = [f for f in debug_fields if f not in builder.plot_order]
@@ -100,6 +108,9 @@ def run_pest_sequence(
                 python_script=getattr(cfg, "python_script", None),
                 conflicted_obs=temp_pdc,
             )
+            if exclude_fields:
+                builder.plot_order = [f for f in builder.plot_order if f not in exclude_fields]
+                builder.pest_args = builder.get_pest_builder_args()
             if debug_fields is not None:
                 builder.plot_order = debug_fields
                 builder.pest_args = builder.get_pest_builder_args()
@@ -149,7 +160,10 @@ if __name__ == "__main__":
         "--sites", type=str, default=None, help="Comma-separated site IDs (debug subset)"
     )
     parser.add_argument(
-        "--pdc-remove", action="store_true", default=True, help="Run PDC removal pass"
+        "--exclude", type=str, default=None, help="Comma-separated site IDs to exclude"
+    )
+    parser.add_argument(
+        "--pdc-remove", action="store_true", default=False, help="Run PDC removal pass"
     )
     parser.add_argument("--workers", type=int, default=None, help="Override worker count")
     args = parser.parse_args()
@@ -159,6 +173,10 @@ if __name__ == "__main__":
     debug_fields = None
     if args.sites:
         debug_fields = [s.strip() for s in args.sites.split(",")]
+
+    exclude_fields = None
+    if args.exclude:
+        exclude_fields = [s.strip() for s in args.exclude.split(",")]
 
     if args.workers:
         cfg.workers = args.workers
@@ -170,6 +188,7 @@ if __name__ == "__main__":
         results,
         pdc_remove=args.pdc_remove,
         debug_fields=debug_fields,
+        exclude_fields=exclude_fields,
     )
     elapsed = time.time() - t0
     print(f"\nTotal elapsed: {elapsed:.1f} s ({elapsed / 60:.1f} min)")

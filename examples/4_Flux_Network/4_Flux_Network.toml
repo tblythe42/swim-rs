@@ -43,7 +43,7 @@ state_col = "state"
 met_source = "gridmet"
 snow_source = "snodas"
 soil_source = "ssurgo"
-mask_mode = "irrigation"
+mask_mode = "none"
 
 [misc]
 irrigation_threshold = 0.3
@@ -63,7 +63,7 @@ cover_proxy = "ndvi"
 pest_run_dir = "{project_workspace}/pestrun"
 etf_target_model = "ssebop"
 workers = 20
-realizations = 200
+realizations = 20
 calibration_dir = "{pest_run_dir}/pest/mult"
 obs_folder = "{pest_run_dir}/obs"
 initial_values_csv = "{pest_run_dir}/params.csv"

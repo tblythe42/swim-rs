@@ -84,6 +84,8 @@ def run_calibrated_model(cfg, container, fids, calibrated_params):
             end_date=cfg.end_dt,
             refet_type=getattr(cfg, "refet_type", "eto") or "eto",
             fields=fids,
+            empirical_kc_max=True,
+            mask_mode=getattr(cfg, "mask_mode", "irrigation"),
         )
 
         output, _ = run_daily_loop_fast(swim_input)
