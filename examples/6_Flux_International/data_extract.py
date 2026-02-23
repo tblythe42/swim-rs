@@ -23,14 +23,16 @@ def _load_config() -> ProjectConfig:
     return config
 
 
-def extract_era5land(conf: ProjectConfig, overwrite: bool = False) -> None:
+def extract_era5land(
+    conf: ProjectConfig, overwrite: bool = False, project: str = "ee-dgketchum"
+) -> None:
     """Exports monthly CSVs to Cloud Storage (ERA5-Land is large; bucket export only)."""
     from swimrs.data_extraction.ee.ee_era5 import sample_era5_land_variables_daily
 
     start_yr = conf.start_dt.year
     end_yr = conf.end_dt.year
 
-    is_authorized()
+    is_authorized(project=project)
     sample_era5_land_variables_daily(
         shapefile=conf.fields_shapefile,
         bucket=conf.ee_bucket,
@@ -44,40 +46,40 @@ def extract_era5land(conf: ProjectConfig, overwrite: bool = False) -> None:
     )
 
 
-def extract_properties(conf: ProjectConfig) -> None:
+def extract_properties(conf: ProjectConfig, project: str = "ee-dgketchum") -> None:
     """Exports landcover + HWSD (AWC) to bucket."""
     from swimrs.data_extraction.ee.ee_props import get_hwsd, get_landcover
 
-    is_authorized()
-    project = conf.project_name or "swim"
+    is_authorized(project=project)
+    prefix = conf.project_name or "swim"
     get_landcover(
         conf.fields_shapefile,
-        f"{project}_landcover",
+        f"{prefix}_landcover",
         debug=False,
         selector=conf.feature_id_col,
         dest="bucket",
         bucket=conf.ee_bucket,
-        file_prefix=project,
+        file_prefix=prefix,
     )
     get_hwsd(
         conf.fields_shapefile,
-        f"{project}_hwsd",
+        f"{prefix}_hwsd",
         debug=False,
         selector=conf.feature_id_col,
         dest="bucket",
         bucket=conf.ee_bucket,
-        file_prefix=project,
+        file_prefix=prefix,
     )
 
 
-def extract_ndvi(conf: ProjectConfig, overwrite=False) -> None:
+def extract_ndvi(conf: ProjectConfig, overwrite=False, project: str = "ee-dgketchum") -> None:
     """Exports Landsat + Sentinel-2 NDVI with mask_type='no_mask' (international workflow)."""
     from swimrs.data_extraction.ee.ndvi_export import sparse_sample_ndvi
 
     start_yr = conf.start_dt.year
     end_yr = conf.end_dt.year
 
-    is_authorized()
+    is_authorized(project=project)
     mask = "no_mask"
 
     if not overwrite:
@@ -115,7 +117,9 @@ def extract_ndvi(conf: ProjectConfig, overwrite=False) -> None:
     )
 
 
-def extract_etf(conf: ProjectConfig, sites=None, overwrite: bool = False) -> None:
+def extract_etf(
+    conf: ProjectConfig, sites=None, overwrite: bool = False, project: str = "ee-dgketchum"
+) -> None:
     """
     Extract PT-JPL ETf zonal statistics using ERA5LAND meteorology.
 
@@ -134,10 +138,10 @@ def extract_etf(conf: ProjectConfig, sites=None, overwrite: bool = False) -> Non
         List of site IDs to process. If None, processes all sites.
     overwrite : bool, optional
         If True, skip check_dir and re-export all data. Default is False.
+    project : str, optional
+        Earth Engine project ID. Default is 'ee-dgketchum'.
     """
-    import ee
-
-    ee.Initialize()
+    is_authorized(project=project)
 
     from etf import export_ptjpl_zonal_stats
 
@@ -179,6 +183,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sites", type=str, default=None, help="Comma-separated site IDs to process"
     )
+    parser.add_argument(
+        "--project", type=str, default="ee-dgketchum", help="Earth Engine project ID"
+    )
 
     args = parser.parse_args()
 
@@ -190,13 +197,13 @@ if __name__ == "__main__":
     sites = args.sites.split(",") if args.sites else None
 
     if args.era5 or args.all:
-        extract_era5land(cfg, overwrite=args.overwrite)
+        extract_era5land(cfg, overwrite=args.overwrite, project=args.project)
 
     if args.props or args.all:
-        extract_properties(cfg)
+        extract_properties(cfg, project=args.project)
 
     if args.ndvi or args.all:
-        extract_ndvi(cfg, overwrite=args.overwrite)
+        extract_ndvi(cfg, overwrite=args.overwrite, project=args.project)
 
     if args.etf or args.all:
-        extract_etf(cfg, sites=sites, overwrite=args.overwrite)
+        extract_etf(cfg, sites=sites, overwrite=args.overwrite, project=args.project)
