@@ -93,8 +93,30 @@ def _discover_scenes(src_path, start_date, end_date, ee_geoms):
     return scene_to_sites
 
 
-def _list_existing_tifs(bucket, prefix):
-    """Return set of filenames (without .tif) already in the GCS prefix."""
+def _list_existing_tifs(bucket, prefix, existing_list=None):
+    """Return set of filenames (without .tif) already in the GCS prefix.
+
+    If *existing_list* is provided it should be a path to a text file with one
+    ``gs://`` URI per line (the output of ``gsutil ls -r``).  Only lines whose
+    path component matches *prefix* are considered.  This avoids needing
+    ``gsutil ls`` access on the running machine.
+    """
+    if existing_list is not None:
+        names = set()
+        target = f"{prefix}/"
+        with open(existing_list) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or not line.endswith(".tif"):
+                    continue
+                # line looks like gs://bucket/openet/etf/model/scene.tif
+                path = line.split(f"{bucket}/", 1)[-1]
+                if not path.startswith(target):
+                    continue
+                blob = path.rsplit("/", 1)[-1]
+                names.add(blob[:-4])
+        return names
+
     uri = f"gs://{bucket}/{prefix}/"
     try:
         result = subprocess.run(
@@ -161,6 +183,7 @@ def copy_openet_to_bucket(
     end_date="2024-12-31",
     select=None,
     single_test=False,
+    existing_list=None,
 ):
     """Export clipped OpenET images to GCS as deduplicated GeoTIFFs.
 
@@ -214,7 +237,7 @@ def copy_openet_to_bucket(
     )
 
     # Check what's already in the bucket
-    existing = _list_existing_tifs(bucket, gcs_prefix)
+    existing = _list_existing_tifs(bucket, gcs_prefix, existing_list=existing_list)
     if existing:
         print(f"Found {len(existing)} existing TIFs in destination, will skip")
 
@@ -312,6 +335,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--single-test", action="store_true", help="Export one image and wait to verify"
     )
+    parser.add_argument(
+        "--existing-list",
+        type=str,
+        default=None,
+        help="Path to text file listing existing gs:// TIF URIs (replaces gsutil ls)",
+    )
     args = parser.parse_args()
 
     is_authorized(project=args.project)
@@ -334,6 +363,7 @@ if __name__ == "__main__":
                 end_date=args.end_date,
                 select=sites,
                 single_test=args.single_test,
+                existing_list=args.existing_list,
             )
         except Exception:
             traceback.print_exc()
