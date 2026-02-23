@@ -1,32 +1,28 @@
 """
-SwimContainer-based data preparation for Example 6 (Flux International).
+Container-based data preparation for Example 6 (Flux International).
 
-This replaces the data_prep.py workflow with direct container ingestion.
-All processed data is stored in the .swim zarr file instead of intermediate files.
+The container workflow:
+    1. Create container from shapefile
+    2. Ingest meteorology (ERA5-Land)
+    3. Ingest remote sensing (NDVI from Landsat/Sentinel, ETf from Landsat PT-JPL + ECOSTRESS)
+    4. Ingest properties (HWSD soils, LULC)
+    5. Compute fused NDVI (Landsat + Sentinel)
+    6. Compute dynamics (ke_max, kc_max, irrigation detection)
 
 Usage:
     python container_prep.py [--overwrite] [--sites SITE1,SITE2,...] [--skip-sentinel]
+                             [--exclude-sites PR-xLA,...]
+
+    # Or use functions directly:
+    from container_prep import create_project_container, prep_all
+    container = create_project_container(overwrite=True)
+    prep_all(container)
 """
 
 import os
-import warnings
 from pathlib import Path
 
-# Suppress zarr 3.x unstable spec warning for VariableLengthBytes (used for WKB geometry)
-# The warning comes from zarr.core.dtype.npy.bytes
-warnings.filterwarnings(
-    "ignore",
-    message="The data type.*VariableLengthBytes.*does not have a Zarr V3 specification",
-)
-# Also suppress the UnstableSpecificationWarning directly
-try:
-    from zarr.core.dtype.common import UnstableSpecificationWarning
-
-    warnings.filterwarnings("ignore", category=UnstableSpecificationWarning)
-except ImportError:
-    pass
-
-from swimrs.container import SwimContainer
+from swimrs.container import SwimContainer, create_container, open_container
 from swimrs.swim.config import ProjectConfig
 
 
@@ -40,53 +36,60 @@ def _load_config() -> ProjectConfig:
     return cfg
 
 
-def create_container(cfg: ProjectConfig, overwrite: bool = False) -> SwimContainer:
-    """Create a new SwimContainer for the project."""
-    container_path = cfg.container_path
+def create_project_container(cfg: ProjectConfig = None, overwrite: bool = False) -> SwimContainer:
+    """Create a new SwimContainer for this project.
 
-    if os.path.exists(container_path):
-        if overwrite:
-            os.remove(container_path)
-            print(f"Removed existing container: {container_path}")
-        else:
-            raise FileExistsError(
-                f"Container already exists: {container_path}. Use overwrite=True to replace."
-            )
+    Args:
+        cfg: ProjectConfig instance (loaded if None)
+        overwrite: If True, overwrite existing container
 
-    print(f"Creating container: {container_path}")
-    print(f"  Fields: {cfg.fields_shapefile}")
-    print(f"  UID column: {cfg.feature_id_col}")
-    print(f"  Date range: {cfg.start_dt} to {cfg.end_dt}")
+    Returns:
+        SwimContainer instance
+    """
+    if cfg is None:
+        cfg = _load_config()
 
-    container = SwimContainer.create(
+    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+
+    if os.path.exists(container_path) and not overwrite:
+        print(f"Opening existing container: {container_path}")
+        return open_container(container_path, mode="r+")
+
+    print(f"Creating new container: {container_path}")
+    container = create_container(
         uri=container_path,
         fields_shapefile=cfg.fields_shapefile,
         uid_column=cfg.feature_id_col,
-        start_date=str(cfg.start_dt.date()),
-        end_date=str(cfg.end_dt.date()),
+        start_date=cfg.start_dt,
+        end_date=cfg.end_dt,
+        project_name=cfg.project_name,
+        overwrite=overwrite,
     )
 
-    print(f"  Created with {container.n_fields} fields")
     return container
 
 
-def ingest_ndvi(
-    container: SwimContainer, cfg: ProjectConfig, sites: list = None, add_sentinel: bool = True
+def ingest_remote_sensing(
+    container: SwimContainer,
+    cfg: ProjectConfig,
+    sites: list = None,
+    add_sentinel: bool = True,
 ):
-    """Ingest NDVI data from Landsat and Sentinel.
+    """Ingest NDVI and ETf into the container.
 
-    Args:
-        container: SwimContainer instance
-        cfg: ProjectConfig instance
-        sites: Optional list of site IDs to include
-        add_sentinel: If True, also ingest Sentinel NDVI
+    NDVI: Landsat + Sentinel (no_mask only for international sites).
+    ETf: Landsat PT-JPL + ECOSTRESS PT-JPL (pre-converted from daily ET).
     """
+    print("\n=== Ingesting Remote Sensing ===")
+
+    etf_model = cfg.etf_target_model  # 'ptjpl'
+
     # Landsat NDVI
-    landsat_ndvi_dir = Path(cfg.landsat_dir) / "extracts" / "ndvi" / "no_mask"
-    if landsat_ndvi_dir.exists():
-        print(f"Ingesting Landsat NDVI from: {landsat_ndvi_dir}")
+    landsat_ndvi_dir = os.path.join(cfg.landsat_dir, "extracts", "ndvi", "no_mask")
+    if os.path.isdir(landsat_ndvi_dir):
+        print("Ingesting Landsat NDVI (no_mask)...")
         container.ingest.ndvi(
-            source_dir=str(landsat_ndvi_dir),
+            source_dir=landsat_ndvi_dir,
             uid_column=cfg.feature_id_col,
             instrument="landsat",
             mask="no_mask",
@@ -97,11 +100,11 @@ def ingest_ndvi(
 
     # Sentinel NDVI
     if add_sentinel:
-        sentinel_ndvi_dir = Path(cfg.sentinel_dir) / "extracts" / "ndvi" / "no_mask"
-        if sentinel_ndvi_dir.exists():
-            print(f"Ingesting Sentinel NDVI from: {sentinel_ndvi_dir}")
+        sentinel_ndvi_dir = os.path.join(cfg.sentinel_dir, "extracts", "ndvi", "no_mask")
+        if os.path.isdir(sentinel_ndvi_dir):
+            print("Ingesting Sentinel NDVI (no_mask)...")
             container.ingest.ndvi(
-                source_dir=str(sentinel_ndvi_dir),
+                source_dir=sentinel_ndvi_dir,
                 uid_column=cfg.feature_id_col,
                 instrument="sentinel",
                 mask="no_mask",
@@ -110,54 +113,48 @@ def ingest_ndvi(
         else:
             print(f"  WARNING: Sentinel NDVI directory not found: {sentinel_ndvi_dir}")
 
-
-def ingest_etf(container: SwimContainer, cfg: ProjectConfig):
-    """Ingest ETf data (PT-JPL model for international).
-
-    Ingests Landsat PT-JPL ETf and, if available, ECOSTRESS ETf
-    (pre-converted from daily ET via ecostress_etf_convert.py).
-    """
-    etf_model = cfg.etf_target_model  # 'ptjpl'
-
     # Landsat ETf
-    landsat_etf_dir = Path(cfg.landsat_dir) / "extracts" / f"{etf_model}_etf" / "no_mask"
-    if landsat_etf_dir.exists():
-        print(f"Ingesting Landsat {etf_model} ETf from: {landsat_etf_dir}")
+    landsat_etf_dir = os.path.join(cfg.landsat_dir, "extracts", f"{etf_model}_etf", "no_mask")
+    if os.path.isdir(landsat_etf_dir):
+        print(f"Ingesting Landsat {etf_model} ETf (no_mask)...")
         container.ingest.etf(
-            source_dir=str(landsat_etf_dir),
+            source_dir=landsat_etf_dir,
             uid_column=cfg.feature_id_col,
             model=etf_model,
             instrument="landsat",
             mask="no_mask",
+            fields=sites,
         )
     else:
         print(f"  WARNING: Landsat ETf directory not found: {landsat_etf_dir}")
 
     # ECOSTRESS ETf (converted from daily ET by ecostress_etf_convert.py)
-    ecostress_etf_dir = Path(cfg.ecostress_dir) / "extracts" / "etf" / "no_mask"
-    if ecostress_etf_dir.exists():
-        print(f"Ingesting ECOSTRESS ETf from: {ecostress_etf_dir}")
+    ecostress_etf_dir = os.path.join(cfg.ecostress_dir, "extracts", "etf", "no_mask")
+    if os.path.isdir(ecostress_etf_dir):
+        print(f"Ingesting ECOSTRESS {etf_model} ETf (no_mask)...")
         container.ingest.etf(
-            source_dir=str(ecostress_etf_dir),
+            source_dir=ecostress_etf_dir,
             uid_column=cfg.feature_id_col,
             model=etf_model,
             instrument="ecostress",
             mask="no_mask",
+            fields=sites,
         )
     else:
         print(
-            f"  NOTE: ECOSTRESS ETf not found at {ecostress_etf_dir} (run ecostress_etf_convert.py first)"
+            f"  NOTE: ECOSTRESS ETf not found at {ecostress_etf_dir}"
+            " (run ecostress_etf_convert.py first)"
         )
 
 
 def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig):
     """Ingest ERA5-Land meteorology data."""
-    met_dir = Path(cfg.met_dir)
+    print("\n=== Ingesting Meteorology (ERA5-Land) ===")
 
-    if met_dir.exists():
-        print(f"Ingesting ERA5-Land meteorology from: {met_dir}")
+    met_dir = cfg.met_dir
+    if os.path.isdir(met_dir):
         container.ingest.era5(
-            source_dir=str(met_dir),
+            source_dir=met_dir,
             variables=cfg.era5_params or ["swe", "eto", "tmean", "tmin", "tmax", "prcp", "srad"],
         )
     else:
@@ -165,125 +162,80 @@ def ingest_meteorology(container: SwimContainer, cfg: ProjectConfig):
 
 
 def ingest_properties(container: SwimContainer, cfg: ProjectConfig):
-    """Ingest static field properties (LULC, HWSD soils)."""
-    print("Ingesting field properties...")
+    """Ingest static field properties (HWSD soils, LULC)."""
+    print("\n=== Ingesting Properties ===")
 
-    lulc_csv = cfg.lulc_csv if cfg.lulc_csv and os.path.exists(cfg.lulc_csv) else None
-    soils_csv = cfg.hwsd_csv if cfg.hwsd_csv and os.path.exists(cfg.hwsd_csv) else None
-
-    if lulc_csv:
-        print(f"  LULC: {lulc_csv}")
-    if soils_csv:
-        print(f"  Soils (HWSD): {soils_csv}")
-
-    if lulc_csv or soils_csv:
-        container.ingest.properties(
-            lulc_csv=lulc_csv,
-            soils_csv=soils_csv,
-            irrigation_csv=None,  # No irrigation data for international
-            uid_column=cfg.feature_id_col,
-            lulc_column="modis_lc",
-            extra_lulc_column="glc10_lc",
-        )
-    else:
-        print("  WARNING: No property files found to ingest")
+    container.ingest.properties(
+        soils_csv=cfg.hwsd_csv,
+        lulc_csv=cfg.lulc_csv,
+        irr_csv=None,  # No irrigation data for international sites
+        uid_column=cfg.feature_id_col,
+        lulc_column="modis_lc",
+        extra_lulc_column="glc10_lc",
+    )
 
 
-def compute_fused_ndvi(container: SwimContainer, cfg: ProjectConfig):
+def compute_fused_ndvi(container: SwimContainer, overwrite: bool = False):
     """Compute fused NDVI by combining Landsat and Sentinel observations."""
-    print("Computing fused NDVI...")
+    print("\n=== Computing Fused NDVI ===")
 
     container.compute.fused_ndvi(
         masks=("no_mask",),
+        overwrite=overwrite,
     )
 
-    print("  Fused NDVI computation complete")
 
-
-def compute_dynamics(container: SwimContainer, cfg: ProjectConfig):
+def compute_dynamics(container: SwimContainer, cfg: ProjectConfig, overwrite: bool = False):
     """Compute field dynamics (ke_max, kc_max, irrigation detection)."""
-    print("Computing dynamics...")
+    print("\n=== Computing Dynamics ===")
 
     container.compute.dynamics(
         etf_model=cfg.etf_target_model,
         masks=("no_mask",),
         instruments=("landsat", "sentinel"),
         use_lulc=True,
-        irr_threshold=cfg.irrigation_threshold,
+        irr_threshold=cfg.irrigation_threshold or 0.3,
         met_source=cfg.met_source,  # "era5" for international
+        overwrite=overwrite,
     )
 
-    print("  Dynamics computation complete")
 
-
-def export_model_inputs(container: SwimContainer, cfg: ProjectConfig, output_path: str = None):
-    """Export data in prepped_input.json format for model consumption."""
-    print("Exporting model inputs...")
-
-    if output_path is None:
-        output_path = cfg.input_data
-
-    container.export.prepped_input_json(
-        output_path=output_path,
-        etf_model=cfg.etf_target_model,
-        masks=("no_mask",),
-        met_source="era5",
-        instrument="landsat",
-        use_fused_ndvi=True,
-    )
-
-    print(f"  Exported to: {output_path}")
-
-
-def run_full_pipeline(overwrite: bool = False, sites: list = None, add_sentinel: bool = True):
-    """Run the complete container preparation pipeline.
+def prep_all(
+    container: SwimContainer,
+    cfg: ProjectConfig = None,
+    sites: list = None,
+    overwrite: bool = False,
+    add_sentinel: bool = True,
+):
+    """Run the complete data preparation workflow.
 
     Args:
-        overwrite: If True, overwrite existing container
-        sites: Optional list of site IDs to process
-        add_sentinel: If True, include Sentinel NDVI ingestion
+        container: SwimContainer instance
+        cfg: ProjectConfig instance (loaded if None)
+        sites: Optional list of site IDs to include
+        overwrite: If True, replace existing data
+        add_sentinel: If True, include Sentinel NDVI
     """
-    cfg = _load_config()
+    if cfg is None:
+        cfg = _load_config()
 
-    print("=" * 60)
-    print(f"Container Preparation: {cfg.project_name}")
-    print(f"  Met source: {cfg.met_source}")
-    print(f"  Soil source: {cfg.soil_source}")
-    print(f"  Mask mode: {cfg.mask_mode}")
-    print("=" * 60)
+    # Step 1: Ingest meteorology
+    ingest_meteorology(container, cfg)
 
-    # Create container
-    container = create_container(cfg, overwrite=overwrite)
+    # Step 2: Ingest remote sensing (NDVI, ETf)
+    ingest_remote_sensing(container, cfg, sites=sites, add_sentinel=add_sentinel)
 
-    try:
-        # Ingest data
-        ingest_ndvi(container, cfg, sites=sites, add_sentinel=add_sentinel)
-        ingest_etf(container, cfg)
-        ingest_meteorology(container, cfg)
-        ingest_properties(container, cfg)
+    # Step 3: Ingest properties
+    ingest_properties(container, cfg)
 
-        # Compute derived products
-        compute_fused_ndvi(container, cfg)
-        compute_dynamics(container, cfg)
+    # Step 4: Compute fused NDVI
+    compute_fused_ndvi(container, overwrite=overwrite)
 
-        # Export model inputs
-        export_model_inputs(container, cfg)
+    # Step 5: Compute dynamics
+    compute_dynamics(container, cfg, overwrite=overwrite)
 
-        # Save
-        print("Saving container...")
-        container.save()
-        print(f"Container saved: {cfg.container_path}")
-
-        # Print summary
-        print("\n" + "=" * 60)
-        print("Summary:")
-        print(f"  Fields: {container.n_fields}")
-        print(f"  Date range: {container.start_date} to {container.end_date}")
-        print(f"  Days: {container.n_days}")
-        print("=" * 60)
-
-    finally:
-        container.close()
+    print("\n=== Container Preparation Complete ===")
+    print(container.inventory)
 
 
 if __name__ == "__main__":
@@ -302,19 +254,52 @@ if __name__ == "__main__":
         help="Comma-separated site IDs to process (default: all)",
     )
     parser.add_argument(
+        "--exclude-sites",
+        type=str,
+        default=None,
+        help="Comma-separated site IDs to exclude",
+    )
+    parser.add_argument(
         "--skip-sentinel",
         action="store_true",
         help="Skip Sentinel NDVI ingestion",
     )
     args = parser.parse_args()
 
-    # Parse sites argument
     select_sites = None
     if args.sites:
         select_sites = [s.strip() for s in args.sites.split(",")]
 
-    run_full_pipeline(
-        overwrite=args.overwrite,
+    # Load configuration
+    config = _load_config()
+
+    # Exclude sites if requested (filter shapefile fields before container creation)
+    if args.exclude_sites:
+        import geopandas as gpd
+
+        exclude = [s.strip() for s in args.exclude_sites.split(",")]
+        shp = config.fields_shapefile
+        gdf = gpd.read_file(shp, engine="fiona")
+        before = len(gdf)
+        gdf = gdf[~gdf[config.feature_id_col].isin(exclude)]
+        # Write filtered shapefile to a temp location for container creation
+        filtered_shp = shp.replace(".shp", "_filtered.shp")
+        gdf.to_file(filtered_shp, engine="fiona")
+        config.fields_shapefile = filtered_shp
+        print(f"Excluded {before - len(gdf)} sites: {exclude} ({len(gdf)} remaining)")
+
+    # Create or open container
+    container = create_project_container(config, overwrite=args.overwrite)
+
+    # Run full preparation workflow
+    prep_all(
+        container,
+        config,
         sites=select_sites,
+        overwrite=args.overwrite,
         add_sentinel=not args.skip_sentinel,
     )
+
+    container.close()
+
+    print(f"\nContainer saved to: {container.path}")
