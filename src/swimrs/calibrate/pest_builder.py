@@ -100,6 +100,8 @@ class PestBuilder:
         else:
             self.masks = ["inv_irr", "irr"]
 
+        self.etf_instrument = getattr(self.config, "etf_target_instrument", "landsat")
+
         self.pest = None
         self.etf_std = None
         self.etf_capture_indexes = []
@@ -201,7 +203,7 @@ class PestBuilder:
             if ensemble_source == "openet":
                 # Use OpenET's pre-computed ensemble directly from the container
                 for mask in self.masks:
-                    path = f"remote_sensing/etf/landsat/ensemble/{mask}"
+                    path = f"remote_sensing/etf/{self.etf_instrument}/ensemble/{mask}"
                     if path in self._container.state.root:
                         df = self._container.query.dataframe(path, fields=[fid])
                         if fid in df.columns:
@@ -215,7 +217,7 @@ class PestBuilder:
                 for mask in self.masks:
                     mask_data = []
                     for m in available_models:
-                        path = f"remote_sensing/etf/landsat/{m}/{mask}"
+                        path = f"remote_sensing/etf/{self.etf_instrument}/{m}/{mask}"
                         if path in self._container.state.root:
                             df = self._container.query.dataframe(path, fields=[fid])
                             if fid in df.columns:
@@ -226,7 +228,7 @@ class PestBuilder:
                         result[f"ensemble_etf_{mask}"] = combined.mean(axis=1)
         else:
             for mask in self.masks:
-                path = f"remote_sensing/etf/landsat/{model}/{mask}"
+                path = f"remote_sensing/etf/{self.etf_instrument}/{model}/{mask}"
                 if path in self._container.state.root:
                     df = self._container.query.dataframe(path, fields=[fid])
                     if fid in df.columns:
@@ -242,7 +244,7 @@ class PestBuilder:
         for model in known_models:
             # Check if at least one mask exists for this model
             for mask in self.masks:
-                path = f"remote_sensing/etf/landsat/{model}/{mask}"
+                path = f"remote_sensing/etf/{self.etf_instrument}/{model}/{mask}"
                 if path in self._container.state.root:
                     available.append(model)
                     break
@@ -524,6 +526,7 @@ class PestBuilder:
             self._container.export.observations(
                 output_dir=obs_dir,
                 etf_model=etf_model,
+                etf_instrument=self.etf_instrument,
                 masks=masks,
                 irr_threshold=float(irr_threshold),
                 fields=fields,
@@ -1130,6 +1133,8 @@ if __name__ == "__main__":
             start_date=self.config.start_dt,
             end_date=self.config.end_dt,
             refet_type=getattr(self.config, "refet_type", "eto") or "eto",
+            etf_model=getattr(self.config, "etf_target_model", "ssebop"),
+            met_source=getattr(self.config, "met_source", "gridmet"),
             empirical_kc_max=True,
             mask_mode=getattr(self.config, "mask_mode", "irrigation"),
         )

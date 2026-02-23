@@ -334,6 +334,7 @@ class Exporter(Component):
         self,
         output_dir: str | Path,
         etf_model: str = "ssebop",
+        etf_instrument: str = "landsat",
         masks: tuple[str, ...] = ("irr", "inv_irr"),
         irr_threshold: float = 0.1,
         fields: list[str] | None = None,
@@ -389,7 +390,7 @@ class Exporter(Component):
                 if _ens_source == "openet":
                     # Use OpenET's pre-computed ensemble directly
                     for mask in masks:
-                        etf_path = f"remote_sensing/etf/landsat/ensemble/{mask}"
+                        etf_path = f"remote_sensing/etf/{etf_instrument}/ensemble/{mask}"
                         if etf_path in self._state.root:
                             etf_data[mask] = self._state.get_xarray(
                                 etf_path,
@@ -401,7 +402,7 @@ class Exporter(Component):
                     # Compute mean across all individual models (DIY)
                     import xarray as xr
 
-                    etf_prefix = "remote_sensing/etf/landsat"
+                    etf_prefix = f"remote_sensing/etf/{etf_instrument}"
                     model_names: list[str] = []
                     if etf_prefix in self._state.root:
                         try:
@@ -428,7 +429,7 @@ class Exporter(Component):
                             etf_data[mask] = stacked.mean(dim="model")
             else:
                 for mask in masks:
-                    etf_path = f"remote_sensing/etf/landsat/{etf_model}/{mask}"
+                    etf_path = f"remote_sensing/etf/{etf_instrument}/{etf_model}/{mask}"
                     if etf_path in self._state.root:
                         etf_data[mask] = self._state.get_xarray(
                             etf_path,
