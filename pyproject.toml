@@ -40,6 +40,7 @@ dependencies = [
   "tqdm",
   "pyarrow",
   "netcdf4>=1.7.4",
+  "refet>=0.4.2",
 ]
 
 [project.optional-dependencies]
@@ -115,8 +116,12 @@ filterwarnings = [
 ]
 addopts = "-v --tb=short"
 
+[tool.uv.sources]
+agweatherqaqc = { path = "../agweather-qaqc", editable = true }
+
 [dependency-groups]
 dev = [
+    "agweatherqaqc",
     "ipykernel>=7.1.0",
     "kaleido>=1.2.0",
     "nbconvert>=7.17.0",
