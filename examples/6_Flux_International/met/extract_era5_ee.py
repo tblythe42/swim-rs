@@ -124,15 +124,14 @@ def export_yearly_tasks(station_ids, meta):
         results = yearly.map(extract_at_stations).flatten()
 
         desc = f"{GCS_PREFIX}_{year}"
-        selectors = ["station_id", "date"] + [
-            "first" if i == 0 else f"first_{i}" for i in range(len(EE_BANDS))
-        ]
+        selectors = ["station_id", "date"] + EE_BANDS
         task = ee.batch.Export.table.toCloudStorage(
             collection=results,
             description=desc,
             bucket=GCS_BUCKET,
             fileNamePrefix=desc,
             fileFormat="CSV",
+            selectors=selectors,
         )
         task.start()
         status = task.status()
