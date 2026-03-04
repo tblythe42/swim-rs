@@ -390,8 +390,10 @@ class Calculator(Component):
         """
         import xarray as xr
 
-        # Meteorology
-        eto_path = f"meteorology/{met_source}/eto"
+        # Meteorology — prefer bias-corrected ETo when available
+        eto_corr_path = f"meteorology/{met_source}/eto_corr"
+        eto_raw_path = f"meteorology/{met_source}/eto"
+        eto_path = eto_corr_path if eto_corr_path in self._state.root else eto_raw_path
         prcp_path = f"meteorology/{met_source}/prcp"
         if eto_path not in self._state.root or prcp_path not in self._state.root:
             self._log.warning("no_met_data", source=met_source)
