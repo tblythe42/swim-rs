@@ -32,7 +32,7 @@ PTJPL_KWARGS = {
     "ea_source": "ERA5LAND",
     "windspeed_source": "ERA5LAND",
     "rs_source": "ERA5LAND",
-    "LWin_source": "ERA5LAND",
+    "lwin_source": "ERA5LAND",
 }
 
 
