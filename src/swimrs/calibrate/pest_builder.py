@@ -63,6 +63,7 @@ class PestBuilder:
         prior_constraint: dict | None = None,
         conflicted_obs: str | None = None,
         verbose: bool = True,
+        select_fields: list[str] | None = None,
     ) -> None:
         """Initialize PestBuilder for PEST++ calibration.
 
@@ -75,6 +76,8 @@ class PestBuilder:
             prior_constraint: Prior constraint settings
             conflicted_obs: Path to conflicted observations file
             verbose: If False, suppress pyemu/PstFrom output. Default True.
+            select_fields: Optional list of field UIDs to calibrate. If None, all fields
+                from the container are used.
         """
         self.config = config
         self.project_ws = config.project_ws
@@ -91,6 +94,16 @@ class PestBuilder:
 
         # Extract data from container (replaces SamplePlots)
         self._load_data_from_container()
+
+        # Filter to selected fields if requested
+        if select_fields is not None:
+            valid = [f for f in select_fields if f in self.plot_order]
+            if not valid:
+                raise ValueError(
+                    f"None of select_fields {select_fields} found in container "
+                    f"(available: {self.plot_order[:5]}...)"
+                )
+            self.plot_order = valid
 
         self.observation_index = {}
 
@@ -256,9 +269,16 @@ class PestBuilder:
         if self._container is None:
             raise ValueError("No container available. Pass container to PestBuilder.__init__")
 
-        path = "snow/snodas/swe"
-        if path not in self._container.state.root:
-            raise ValueError(f"SWE data not found in container at {path}")
+        path = None
+        for candidate in ["snow/snodas/swe", "meteorology/era5/swe"]:
+            if candidate in self._container.state.root:
+                path = candidate
+                break
+
+        if path is None:
+            raise ValueError(
+                "SWE data not found in container (checked snow/snodas/swe, meteorology/era5/swe)"
+            )
 
         df = self._container.query.dataframe(path, fields=[fid])
         result = pd.DataFrame(index=df.index)
@@ -1056,6 +1076,9 @@ if __name__ == "__main__":
                 start_date=self.config.start_dt,
                 end_date=self.config.end_dt,
                 refet_type=getattr(self.config, "refet_type", "eto") or "eto",
+                etf_model=getattr(self.config, "etf_target_model", "ssebop"),
+                met_source=getattr(self.config, "met_source", "gridmet"),
+                empirical_kc_max=True,
                 mask_mode=getattr(self.config, "mask_mode", "irrigation"),
             )
 

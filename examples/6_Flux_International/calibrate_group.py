@@ -40,10 +40,10 @@ def _site_ids(cfg: ProjectConfig, select: list[str] | None = None) -> list[str]:
 def run_group_calibration(
     *,
     select_sites: list[str] | None = None,
-    workers: int = 8,
+    workers: int | None = None,
     realizations: int | None = None,
     overwrite: bool = False,
-    pdc_remove: bool = True,
+    pdc_remove: bool = False,
 ) -> None:
     cfg = _load_config(calibrate=True)
 
@@ -62,7 +62,11 @@ def run_group_calibration(
     container = SwimContainer.open(container_path, mode="r")
 
     builder = PestBuilder(
-        cfg, container, use_existing=False, python_script=getattr(cfg, "python_script", None)
+        cfg,
+        container,
+        use_existing=False,
+        python_script=getattr(cfg, "python_script", None),
+        select_fields=sites if select_sites else None,
     )
     builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
     builder.build_localizer()
@@ -90,6 +94,7 @@ def run_group_calibration(
                 use_existing=False,
                 python_script=getattr(cfg, "python_script", None),
                 conflicted_obs=temp_pdc,
+                select_fields=sites if select_sites else None,
             )
             builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
             builder.build_localizer()
@@ -98,6 +103,7 @@ def run_group_calibration(
 
     # Main run
     reals = int(realizations) if realizations is not None else int(cfg.realizations or 250)
+    n_workers = int(workers) if workers is not None else int(getattr(cfg, "workers", 8))
     builder.write_control_settings(noptmax=3, reals=reals)
 
     pst_name = f"{project}.pst"
@@ -105,7 +111,7 @@ def run_group_calibration(
         builder.pest_dir,
         exe_,
         pst_name,
-        num_workers=int(workers),
+        num_workers=n_workers,
         worker_root=builder.workers_dir,
         master_dir=builder.master_dir,
         verbose=False,
@@ -135,5 +141,22 @@ def run_group_calibration(
 
 
 if __name__ == "__main__":
-    # Keep this script simple; edit/select sites as needed for the international run.
-    run_group_calibration()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Calibrate 6_Flux_International with PEST++ IES")
+    parser.add_argument("--sites", type=str, default=None, help="Comma-separated site IDs (subset)")
+    parser.add_argument("--workers", type=int, default=None, help="Override worker count")
+    parser.add_argument("--realizations", type=int, default=None, help="Override realizations")
+    parser.add_argument("--overwrite", action="store_true", default=False, help="Wipe pest_run_dir")
+    parser.add_argument("--pdc-remove", action="store_true", default=False, help="Run PDC removal")
+    args = parser.parse_args()
+
+    sites = [s.strip() for s in args.sites.split(",")] if args.sites else None
+
+    run_group_calibration(
+        select_sites=sites,
+        workers=args.workers,
+        realizations=args.realizations,
+        overwrite=args.overwrite,
+        pdc_remove=args.pdc_remove,
+    )
