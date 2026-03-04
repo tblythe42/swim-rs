@@ -23,6 +23,12 @@ ISD_STATIONS = "/nas/climate/isd/indices/stations.parquet"
 NC_DIR = Path("/data/ssd1/era5-land/era5_nc_daily_1990-2024")
 OUT_DIR = Path(__file__).parent / "era5_extractions"
 
+# NetCDF grid domain (CONUS only)
+NC_LAT_MIN = 22.2
+NC_LAT_MAX = 60.4
+NC_LON_MIN = -129.6
+NC_LON_MAX = -63.0
+
 # ERA5-Land NetCDF file stems -> short variable keys
 NC_FILES = {
     "tmax": "temperature_2m_max_1990-2024_daily",
@@ -109,10 +115,27 @@ def main():
 
     meta = get_station_meta(station_ids)
     station_ids = [s for s in station_ids if s in meta.index]
+    print(f"  {len(station_ids)} stations with metadata")
+
+    # Partition into in-domain (CONUS NC grid) vs out-of-domain
+    in_domain = []
+    out_domain = []
+    for sid in station_ids:
+        lat = meta.loc[sid, "latitude"]
+        lon = meta.loc[sid, "longitude"]
+        if NC_LAT_MIN <= lat <= NC_LAT_MAX and NC_LON_MIN <= lon <= NC_LON_MAX:
+            in_domain.append(sid)
+        else:
+            out_domain.append(sid)
+
+    if out_domain:
+        print(f"  {len(out_domain)} stations outside CONUS NC domain — use extract_era5_ee.py")
+    station_ids = in_domain
+    print(f"  {len(station_ids)} in-domain stations for NC extraction")
+
     lats = meta.loc[station_ids, "latitude"].values
     lons = meta.loc[station_ids, "longitude"].values
     elevs = meta.loc[station_ids, "elevation"].values
-    print(f"  {len(station_ids)} stations with metadata")
 
     # Extract all NC variables
     print("Extracting ERA5-Land variables from NetCDF...")
