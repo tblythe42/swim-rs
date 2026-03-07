@@ -7,6 +7,7 @@ Usage: container.ingest.ndvi(...)
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +21,94 @@ if TYPE_CHECKING:
     from swimrs.container.components.grid_mapping import GridMapping
     from swimrs.container.provenance import ProvenanceEvent
     from swimrs.container.state import ContainerState
+
+# Parameters stored in the calibration group
+CALIBRATION_PARAMS = (
+    "aw",
+    "mad",
+    "ndvi_k",
+    "ndvi_0",
+    "swe_alpha",
+    "swe_beta",
+    "ks_damp",
+    "kr_damp",
+)
+
+# PEST++ column name mapping → internal names
+_PEST_NAME_MAP = {
+    "ks_alpha": "ks_damp",
+    "kr_alpha": "kr_damp",
+    "ndvi_k": "ndvi_k",
+    "ndvi_0": "ndvi_0",
+    "swe_alpha": "swe_alpha",
+    "swe_beta": "swe_beta",
+    "aw": "aw",
+    "mad": "mad",
+}
+
+
+def parse_pest_par_csv(
+    par_csv: str | Path,
+    fids: list[str],
+    summary_stat: str = "median",
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Parse PEST++ .par.csv into per-parameter, per-field values and uncertainties.
+
+    Parameters
+    ----------
+    par_csv : str | Path
+        Path to a PEST++ .par.csv file (realizations × parameters).
+    fids : list[str]
+        Field UIDs expected in the column names.
+    summary_stat : str
+        Summary statistic across realizations: ``"median"`` or ``"mean"``.
+
+    Returns
+    -------
+    values : dict[str, dict[str, float]]
+        ``{param_name: {fid: value}}`` using internal names (e.g. ``ks_damp``).
+    stds : dict[str, dict[str, float]]
+        ``{param_name: {fid: std}}`` across realizations.
+    """
+    df = pd.read_csv(par_csv, index_col=0)
+    numeric_rows = df.loc[df.index != "base"]
+
+    if summary_stat == "median":
+        center = numeric_rows.median()
+    else:
+        center = numeric_rows.mean()
+    spread = numeric_rows.std()
+
+    fids_lower = {f.lower(): f for f in fids}
+
+    values: dict[str, dict[str, float]] = {}
+    stds: dict[str, dict[str, float]] = {}
+
+    for col in df.columns:
+        # Column format: pname:p_{param}_{fid}_ptype:tied_0_:0
+        parts = col.split("_ptype:")[0]
+        parts = parts.replace("pname:p_", "")
+        parts = parts.rsplit("_:0", 1)[0]
+
+        matched_fid = None
+        param_name = None
+        for fid_orig in fids:
+            if parts.lower().endswith(f"_{fid_orig.lower()}"):
+                matched_fid = fid_orig
+                param_name = parts[: -(len(fid_orig) + 1)]
+                break
+
+        if matched_fid is None or param_name is None:
+            continue
+
+        internal_name = _PEST_NAME_MAP.get(param_name, param_name)
+        if internal_name not in CALIBRATION_PARAMS:
+            continue
+
+        values.setdefault(internal_name, {})[matched_fid] = float(center[col])
+        stds.setdefault(internal_name, {})[matched_fid] = float(spread[col])
+
+    return values, stds
 
 
 def _parse_single_csv(
@@ -839,6 +928,132 @@ class Ingestor(Component):
                 source_format="dynamics_json",
                 params={},
                 fields_affected=list(data.get("ke_max", {}).keys()),
+            )
+
+            self._state.mark_modified()
+            self._state.refresh()
+
+            return event
+
+    # -------------------------------------------------------------------------
+    # Calibration Ingestion
+    # -------------------------------------------------------------------------
+
+    def calibration(
+        self,
+        par_csv: str | Path,
+        fields: list[str] | None = None,
+        batch_id: int | None = None,
+        summary_stat: str = "median",
+    ) -> ProvenanceEvent:
+        """Ingest calibrated parameters from a PEST++ .par.csv into the container.
+
+        Creates (or updates) the ``calibration/`` group with best-estimate
+        parameter values and uncertainty (std across realizations).  Supports
+        incremental batch-by-batch ingestion — only the fields present in
+        *par_csv* are overwritten; other indices retain their NaN fill.
+
+        Parameters
+        ----------
+        par_csv : str | Path
+            Path to a PEST++ ``.par.csv`` file.
+        fields : list[str], optional
+            Subset of field UIDs to ingest.  Defaults to all container fields.
+        batch_id : int, optional
+            Batch identifier written to ``calibration/metadata/batch_id``.
+        summary_stat : str
+            ``"median"`` or ``"mean"`` across ensemble realizations.
+
+        Returns
+        -------
+        ProvenanceEvent
+        """
+        self._ensure_writable()
+        par_csv = Path(par_csv)
+
+        fids = fields if fields else self._state.field_uids
+
+        with self._track_operation(
+            "ingest_calibration",
+            target="calibration",
+            source=str(par_csv),
+        ) as ctx:
+            values, stds = parse_pest_par_csv(par_csv, fids, summary_stat)
+
+            # Ensure calibration groups exist
+            self._state.ensure_group("calibration/parameters")
+            self._state.ensure_group("calibration/uncertainty")
+            self._state.ensure_group("calibration/metadata")
+
+            # Write parameter and uncertainty arrays
+            for param in CALIBRATION_PARAMS:
+                for prefix, data_dict in [
+                    ("calibration/parameters", values),
+                    ("calibration/uncertainty", stds),
+                ]:
+                    path = f"{prefix}/{param}"
+                    if path not in self._state.root:
+                        self._state.create_property_array(path, dtype="float64", fill_value=np.nan)
+                    arr = self._state.root[path]
+                    if param in data_dict:
+                        for fid, val in data_dict[param].items():
+                            if fid in self._state._uid_to_index:
+                                idx = self._state.get_field_index(fid)
+                                arr[idx] = val
+
+            # Write metadata arrays
+            for meta_name, dtype, fill in [
+                ("batch_id", "int32", -1),
+                ("calibrated", "uint8", 0),
+            ]:
+                meta_path = f"calibration/metadata/{meta_name}"
+                if meta_path not in self._state.root:
+                    self._state.create_property_array(meta_path, dtype=dtype, fill_value=fill)
+
+            meta_batch = self._state.root["calibration/metadata/batch_id"]
+            meta_cal = self._state.root["calibration/metadata/calibrated"]
+
+            calibrated_fids = set()
+            for param_vals in values.values():
+                calibrated_fids.update(param_vals.keys())
+
+            for fid in calibrated_fids:
+                if fid in self._state._uid_to_index:
+                    idx = self._state.get_field_index(fid)
+                    meta_cal[idx] = 1
+                    if batch_id is not None:
+                        meta_batch[idx] = batch_id
+
+            # Update group-level attrs
+            cal_group = self._state.root["calibration"]
+            existing_attrs = dict(cal_group.attrs) if cal_group.attrs else {}
+            existing_attrs["summary_stat"] = summary_stat
+            n_calibrated = int(np.sum(np.asarray(meta_cal[:]) > 0))
+            existing_attrs["n_fields_calibrated"] = n_calibrated
+
+            batches_meta = existing_attrs.get("batches", {})
+            if isinstance(batches_meta, str):
+                batches_meta = json.loads(batches_meta)
+            if batch_id is not None:
+                batches_meta[str(batch_id)] = {
+                    "n_fields": len(calibrated_fids),
+                    "status": "ingested",
+                }
+            existing_attrs["batches"] = json.dumps(batches_meta)
+            existing_attrs["n_batches_completed"] = len(batches_meta)
+
+            cal_group.attrs.update(existing_attrs)
+
+            ctx["fields_processed"] = len(calibrated_fids)
+
+            event = self._state.provenance.record(
+                "ingest",
+                target="calibration",
+                source=str(par_csv),
+                source_format="pest_par_csv",
+                params={"batch_id": batch_id, "summary_stat": summary_stat},
+                fields_affected=list(calibrated_fids),
+                records_count=len(calibrated_fids),
             )
 
             self._state.mark_modified()

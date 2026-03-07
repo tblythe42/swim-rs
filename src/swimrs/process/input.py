@@ -569,6 +569,8 @@ def build_swim_input(
         calibrated_params = None
         if calibrated_params_path is not None:
             calibrated_params = _load_calibrated_params(calibrated_params_path, fids)
+        elif _container_has_calibration(container):
+            calibrated_params = _load_calibrated_from_container(container, fids)
 
         # Write properties from container data
         _write_properties_from_container(
@@ -761,11 +763,11 @@ def _write_properties_from_container(
     props = container_data["props"]
     dynamics = container_data["dynamics"]
 
-    # AWC: calibrated or from container
+    # AWC: calibrated (masked) or from container
+    awc = np.array([props.get(fid, {}).get("awc", 0.15) * 1000 for fid in fids])
     if calibrated_params is not None and "aw" in calibrated_params:
-        awc = calibrated_params["aw"]
-    else:
-        awc = np.array([props.get(fid, {}).get("awc", 0.15) * 1000 for fid in fids])
+        mask = ~np.isnan(calibrated_params["aw"])
+        awc[mask] = calibrated_params["aw"][mask]
 
     # Ksat
     # Units: mm/day (see `src/swimrs/units.py` PROCESS_CANONICAL_UNITS['ksat']).
@@ -794,10 +796,10 @@ def _write_properties_from_container(
     cn2 = np.where(clay < 15.0, 67.0, np.where(clay > 30.0, 85.0, 77.0))
 
     # mad (management allowable depletion)
+    mad = np.full(n_fields, 0.5)
     if calibrated_params is not None and "mad" in calibrated_params:
-        mad = calibrated_params["mad"]
-    else:
-        mad = np.full(n_fields, 0.5)
+        mask = ~np.isnan(calibrated_params["mad"])
+        mad[mask] = calibrated_params["mad"][mask]
 
     # Irrigation status from dynamics
     irr_data = dynamics.get("irr", {})
@@ -830,22 +832,22 @@ def _write_properties_from_container(
         kc_max = np.full(n_fields, 1.35)
 
     # f_sub
+    f_sub_values = []
+    for fid in fids:
+        fid_gw = gwsub_data.get(fid, {})
+        if isinstance(fid_gw, dict) and fid_gw:
+            yearly_fsub = [
+                yr_data.get("f_sub", 0.0)
+                for yr_data in fid_gw.values()
+                if isinstance(yr_data, dict)
+            ]
+            f_sub_values.append(np.mean(yearly_fsub) if yearly_fsub else 0.0)
+        else:
+            f_sub_values.append(0.0)
+    f_sub = np.array(f_sub_values)
     if calibrated_params is not None and "f_sub" in calibrated_params:
-        f_sub = calibrated_params["f_sub"]
-    else:
-        f_sub_values = []
-        for fid in fids:
-            fid_gw = gwsub_data.get(fid, {})
-            if isinstance(fid_gw, dict) and fid_gw:
-                yearly_fsub = [
-                    yr_data.get("f_sub", 0.0)
-                    for yr_data in fid_gw.values()
-                    if isinstance(yr_data, dict)
-                ]
-                f_sub_values.append(np.mean(yearly_fsub) if yearly_fsub else 0.0)
-            else:
-                f_sub_values.append(0.0)
-        f_sub = np.array(f_sub_values)
+        mask = ~np.isnan(calibrated_params["f_sub"])
+        f_sub[mask] = calibrated_params["f_sub"][mask]
 
     # Write datasets
     props_group.create_dataset("awc", data=awc)
@@ -902,20 +904,19 @@ def _write_parameters_from_container(
     ks_damp = np.full(n_fields, 0.2)
     max_irr_rate = np.full(n_fields, 100.0)
 
-    # Override with calibrated values
+    # Override with calibrated values (masked: only where non-NaN)
     if calibrated_params is not None:
-        if "ndvi_k" in calibrated_params:
-            ndvi_k = calibrated_params["ndvi_k"]
-        if "ndvi_0" in calibrated_params:
-            ndvi_0 = calibrated_params["ndvi_0"]
-        if "swe_alpha" in calibrated_params:
-            swe_alpha = calibrated_params["swe_alpha"]
-        if "swe_beta" in calibrated_params:
-            swe_beta = calibrated_params["swe_beta"]
-        if "kr_damp" in calibrated_params:
-            kr_damp = calibrated_params["kr_damp"]
-        if "ks_damp" in calibrated_params:
-            ks_damp = calibrated_params["ks_damp"]
+        for pname, arr in [
+            ("ndvi_k", ndvi_k),
+            ("ndvi_0", ndvi_0),
+            ("swe_alpha", swe_alpha),
+            ("swe_beta", swe_beta),
+            ("kr_damp", kr_damp),
+            ("ks_damp", ks_damp),
+        ]:
+            if pname in calibrated_params:
+                mask = ~np.isnan(calibrated_params[pname])
+                arr[mask] = calibrated_params[pname][mask]
 
     params_group.create_dataset("kc_min", data=kc_min)
     params_group.create_dataset("ndvi_k", data=ndvi_k)
@@ -1354,5 +1355,50 @@ def _load_calibrated_params(
         for file_name, internal_name in name_map.items():
             if file_name in field_params:
                 result[internal_name][fid_idx] = field_params[file_name]
+
+    return result
+
+
+def _container_has_calibration(container: SwimContainer) -> bool:
+    """Check whether the container has ingested calibration parameters."""
+    return "calibration/parameters" in container._root
+
+
+def _load_calibrated_from_container(
+    container: SwimContainer,
+    fids: list[str],
+) -> dict[str, NDArray[np.float64]]:
+    """Load calibrated parameters from the container's calibration group.
+
+    Returns the same format as ``_load_calibrated_params``: a dict mapping
+    parameter names to ``(n_fields,)`` float64 arrays.  Uncalibrated fields
+    remain NaN so the masked-assignment logic in the callers preserves
+    their defaults.
+    """
+    from swimrs.container.components.ingestor import CALIBRATION_PARAMS
+
+    root = container._root
+    n_fields = len(fids)
+    uid_to_idx = {uid: i for i, uid in enumerate(fids)}
+
+    # Build a mapping from container index → output index
+    container_uids = container.field_uids
+    container_idx_map: dict[int, int] = {}
+    for c_idx, uid in enumerate(container_uids):
+        if uid in uid_to_idx:
+            container_idx_map[c_idx] = uid_to_idx[uid]
+
+    result: dict[str, NDArray[np.float64]] = {}
+
+    for param in CALIBRATION_PARAMS:
+        path = f"calibration/parameters/{param}"
+        if path not in root:
+            continue
+        arr = np.full(n_fields, np.nan, dtype=np.float64)
+        stored = np.asarray(root[path][:])
+        for c_idx, out_idx in container_idx_map.items():
+            if c_idx < len(stored) and not np.isnan(stored[c_idx]):
+                arr[out_idx] = stored[c_idx]
+        result[param] = arr
 
     return result
