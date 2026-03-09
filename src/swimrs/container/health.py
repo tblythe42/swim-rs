@@ -819,7 +819,7 @@ def render_summary_png(report: HealthReport, output_path: str | Path) -> Path:
 
     output_path = Path(output_path)
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 6))
+    fig = plt.figure(figsize=(16, 6))
     fig.suptitle(
         f"Container Health: {'PASS' if report.passed else 'FAIL'}",
         fontsize=14,
@@ -829,7 +829,7 @@ def render_summary_png(report: HealthReport, output_path: str | Path) -> Path:
     colors = {"PASS": "#22863a", "WARN": "#b08800", "FAIL": "#cb2431"}
 
     # Panel 1: Properties coverage
-    ax1 = axes[0]
+    ax1 = fig.add_subplot(1, 3, 1)
     prop_checks = [c for c in report.checks if c.section == "properties"]
     if prop_checks:
         labels = [c.path.split("/")[-1] for c in prop_checks]
@@ -846,7 +846,7 @@ def render_summary_png(report: HealthReport, output_path: str | Path) -> Path:
     ax1.set_title("Properties Coverage")
 
     # Panel 2: Time series obs/field
-    ax2 = axes[1]
+    ax2 = fig.add_subplot(1, 3, 2)
     ts_checks = [c for c in report.checks if c.section == "time_series"]
     if ts_checks:
         labels = []
@@ -860,7 +860,7 @@ def render_summary_png(report: HealthReport, output_path: str | Path) -> Path:
     ax2.set_title("Time Series Coverage")
 
     # Panel 3: Policy check grid
-    ax3 = axes[2]
+    ax3 = fig.add_subplot(1, 3, 3)
     policy_checks = [c for c in report.checks if c.section == "policy"]
     if policy_checks:
         labels = [c.path.split("/")[-1] for c in policy_checks]
