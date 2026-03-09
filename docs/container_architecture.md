@@ -12,6 +12,7 @@ src/swimrs/container/
 ├── schema.py             # Data schema definitions and enums
 ├── provenance.py         # Audit trail for all operations
 ├── inventory.py          # Coverage tracking and validation
+├── health.py             # Health checking and policy enforcement
 ├── metrics.py            # Operation performance metrics
 ├── logging.py            # Structured JSON logging
 ├── components/           # Functional component classes
