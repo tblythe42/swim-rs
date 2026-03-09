@@ -100,10 +100,38 @@ class HealthPolicy:
             if cfg_val is not None and str(cfg_val) == rule.config_value:
                 rules.append(rule)
 
+        # Field-level remote sensing coverage rules based on mask_mode
+        mask_mode = config.get("mask_mode")
+        if mask_mode == "irrigation":
+            # NDVI: every field needs obs in irr OR inv_irr
+            rules.append(
+                PolicyRule(
+                    "mask_mode",
+                    "irrigation",
+                    "remote_sensing/ndvi/landsat",
+                    "field_coverage_union",
+                    0,
+                    "FAIL",
+                    "Every field must have NDVI obs in irr or inv_irr",
+                )
+            )
+        elif mask_mode == "no_mask":
+            rules.append(
+                PolicyRule(
+                    "mask_mode",
+                    "no_mask",
+                    "remote_sensing/ndvi/landsat/no_mask",
+                    "field_coverage",
+                    0,
+                    "FAIL",
+                    "mask_mode=no_mask requires NDVI for all fields",
+                )
+            )
+
         # Dynamic rules for etf_target_model
         etf_model = config.get("etf_target_model")
         if etf_model:
-            mask = "irr" if config.get("mask_mode") == "irrigation" else "inv_irr"
+            mask = "irr" if mask_mode == "irrigation" else "inv_irr"
             path = f"remote_sensing/etf/landsat/{etf_model}/{mask}"
             rules.append(
                 PolicyRule(
@@ -116,11 +144,37 @@ class HealthPolicy:
                     f"etf_target_model={etf_model} requires ETf array at {path}",
                 )
             )
+            # Field-level coverage for ETf
+            if mask_mode == "irrigation":
+                rules.append(
+                    PolicyRule(
+                        "etf_target_model",
+                        etf_model,
+                        f"remote_sensing/etf/landsat/{etf_model}",
+                        "field_coverage_union",
+                        0,
+                        "FAIL",
+                        f"Every field must have ETf ({etf_model}) obs in irr or inv_irr",
+                    )
+                )
+            elif mask_mode == "no_mask":
+                no_mask_path = f"remote_sensing/etf/landsat/{etf_model}/no_mask"
+                rules.append(
+                    PolicyRule(
+                        "etf_target_model",
+                        etf_model,
+                        no_mask_path,
+                        "field_coverage",
+                        0,
+                        "FAIL",
+                        f"mask_mode=no_mask requires ETf ({etf_model}) for all fields",
+                    )
+                )
 
         # Dynamic rules for ensemble members
         members = config.get("etf_ensemble_members")
         if members:
-            mask = "irr" if config.get("mask_mode") == "irrigation" else "inv_irr"
+            mask = "irr" if mask_mode == "irrigation" else "inv_irr"
             for member in members:
                 path = f"remote_sensing/etf/landsat/{member}/{mask}"
                 rules.append(
@@ -134,6 +188,32 @@ class HealthPolicy:
                         f"Ensemble member {member} requires ETf array at {path}",
                     )
                 )
+                # Field-level coverage for ensemble members
+                if mask_mode == "irrigation":
+                    rules.append(
+                        PolicyRule(
+                            "etf_ensemble_members",
+                            member,
+                            f"remote_sensing/etf/landsat/{member}",
+                            "field_coverage_union",
+                            0,
+                            "FAIL",
+                            f"Every field must have ETf ({member}) obs in irr or inv_irr",
+                        )
+                    )
+                elif mask_mode == "no_mask":
+                    no_mask_path = f"remote_sensing/etf/landsat/{member}/no_mask"
+                    rules.append(
+                        PolicyRule(
+                            "etf_ensemble_members",
+                            member,
+                            no_mask_path,
+                            "field_coverage",
+                            0,
+                            "FAIL",
+                            f"mask_mode=no_mask requires ETf ({member}) for all fields",
+                        )
+                    )
 
         # Dynamic rule for met_source
         met_source = config.get("met_source")
@@ -432,8 +512,28 @@ class ContainerHealthCheck:
         except AttributeError:
             return
 
+        # If this group has both irr and inv_irr 2D children, skip them —
+        # the field_coverage_union policy rules handle correctness.
+        has_irr_pair = "irr" in members and "inv_irr" in members
+        if has_irr_pair:
+            try:
+                irr_child = group["irr"]
+                inv_child = group["inv_irr"]
+                irr_is_2d = hasattr(irr_child, "ndim") and irr_child.ndim == 2
+                inv_is_2d = hasattr(inv_child, "ndim") and inv_child.ndim == 2
+            except KeyError:
+                irr_is_2d = inv_is_2d = False
+            skip_paired = irr_is_2d and inv_is_2d
+        else:
+            skip_paired = False
+
         for name in members:
             child_path = f"{path}/{name}"
+
+            # Skip irr/inv_irr paired arrays (policy rules check these)
+            if skip_paired and name in ("irr", "inv_irr"):
+                continue
+
             try:
                 child = group[name]
             except KeyError:
@@ -598,6 +698,12 @@ class ContainerHealthCheck:
         """Evaluate a single policy rule."""
         path = rule.required_path
 
+        # Dispatch checks that operate on groups or need custom reads
+        if rule.check == "field_coverage_union":
+            return self._check_field_coverage_union(rule)
+        if rule.check == "field_coverage":
+            return self._check_field_coverage(rule)
+
         try:
             arr = self._root[path]
         except KeyError:
@@ -667,6 +773,104 @@ class ContainerHealthCheck:
             {"check": rule.check},
         )
 
+    def _check_field_coverage_union(self, rule: PolicyRule) -> CheckResult:
+        """Check that every field has obs in at least one of irr or inv_irr."""
+        path = rule.required_path
+        irr_path = f"{path}/irr"
+        inv_irr_path = f"{path}/inv_irr"
+
+        n_fields = len(self._field_uids)
+        irr_valid = np.zeros(n_fields, dtype=int)
+        inv_irr_valid = np.zeros(n_fields, dtype=int)
+
+        try:
+            arr_irr = self._root[irr_path]
+            if arr_irr.ndim == 2:
+                irr_valid = np.sum(~np.isnan(np.asarray(arr_irr[:])), axis=0)
+        except KeyError:
+            pass
+
+        try:
+            arr_inv = self._root[inv_irr_path]
+            if arr_inv.ndim == 2:
+                inv_irr_valid = np.sum(~np.isnan(np.asarray(arr_inv[:])), axis=0)
+        except KeyError:
+            pass
+
+        # A field passes if it has obs in either irr or inv_irr
+        union_valid = (irr_valid > 0) | (inv_irr_valid > 0)
+        n_uncovered = int(np.sum(~union_valid))
+
+        if n_uncovered > 0:
+            return CheckResult(
+                "policy",
+                path,
+                rule.severity,
+                f"{n_uncovered}/{n_fields} fields have zero obs in both irr and inv_irr: {rule.message}",
+                {
+                    "check": rule.check,
+                    "uncovered_fields": n_uncovered,
+                    "total_fields": n_fields,
+                },
+            )
+
+        return CheckResult(
+            "policy",
+            path,
+            "PASS",
+            f"OK: all fields covered (irr∪inv_irr): {rule.message}",
+            {"check": rule.check},
+        )
+
+    def _check_field_coverage(self, rule: PolicyRule) -> CheckResult:
+        """Check that every field has at least one valid obs."""
+        path = rule.required_path
+        n_fields = len(self._field_uids)
+
+        try:
+            arr = self._root[path]
+        except KeyError:
+            return CheckResult(
+                "policy",
+                path,
+                rule.severity,
+                f"Missing: {rule.message}",
+                {"check": rule.check},
+            )
+
+        if arr.ndim != 2:
+            return CheckResult(
+                "policy",
+                path,
+                "PASS",
+                f"OK (non-2D array): {rule.message}",
+                {"check": rule.check},
+            )
+
+        valid_per_field = np.sum(~np.isnan(np.asarray(arr[:])), axis=0)
+        n_uncovered = int(np.sum(valid_per_field == 0))
+
+        if n_uncovered > 0:
+            return CheckResult(
+                "policy",
+                path,
+                rule.severity,
+                f"{n_uncovered}/{n_fields} fields have zero obs: {rule.message}",
+                {
+                    "check": rule.check,
+                    "uncovered_fields": n_uncovered,
+                    "total_fields": n_fields,
+                },
+            )
+
+        return CheckResult(
+            "policy",
+            path,
+            "PASS",
+            f"OK: all fields have obs: {rule.message}",
+            {"check": rule.check},
+        )
+
 
 # ---------------------------------------------------------------------------
 # Container fingerprint
@@ -708,16 +912,14 @@ def _hash_group(h: Any, group):
             h.update(str(child.dtype).encode())
 
             try:
-                data = child[:]
                 if child.ndim == 1:
-                    # Hash full content of 1D arrays
-                    h.update(np.asarray(data).tobytes())
+                    # Hash full content of 1D arrays (small)
+                    h.update(np.asarray(child[:]).tobytes())
                 elif child.ndim == 2:
-                    # Hash first 10 and last 10 rows
-                    arr = np.asarray(data)
-                    n = min(10, arr.shape[0])
-                    h.update(arr[:n].tobytes())
-                    h.update(arr[-n:].tobytes())
+                    # Hash first n and last n rows via partial reads
+                    n = min(10, child.shape[0])
+                    h.update(np.asarray(child[:n]).tobytes())
+                    h.update(np.asarray(child[-n:]).tobytes())
             except Exception:
                 pass
         elif hasattr(child, "keys"):
