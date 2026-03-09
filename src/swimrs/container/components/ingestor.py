@@ -1654,6 +1654,7 @@ class Ingestor(Component):
 
         df = pd.read_csv(lulc_csv)
         df = df.set_index(uid_column)
+        df.index = df.index.astype(str)
 
         # Apply GLCLand10 crop override
         # If extra LULC column has value 10 (crop) and MODIS is not 12, override to 12
@@ -1666,6 +1667,7 @@ class Ingestor(Component):
         if irrigation_csv:
             irr_df = pd.read_csv(Path(irrigation_csv))
             irr_df = irr_df.set_index(uid_column)
+            irr_df.index = irr_df.index.astype(str)
 
             # Drop non-numeric columns
             numeric_cols = irr_df.select_dtypes(include=[np.number]).columns
@@ -1698,6 +1700,7 @@ class Ingestor(Component):
         """
         df = pd.read_csv(soils_csv)
         df = df.set_index(uid_column)
+        df.index = df.index.astype(str)
 
         # Common soil property columns
         soil_props = {
@@ -1746,6 +1749,7 @@ class Ingestor(Component):
 
         df = pd.read_csv(irrigation_csv)
         df = df.set_index(uid_column)
+        df.index = df.index.astype(str)
 
         # Extract year columns (format: irr_YYYY)
         year_cols = [c for c in df.columns if c.startswith("irr_") and c[4:].isdigit()]
@@ -1809,6 +1813,7 @@ class Ingestor(Component):
         """Ingest location data (lat, lon, elevation)."""
         df = pd.read_csv(location_csv)
         df = df.set_index(uid_column)
+        df.index = df.index.astype(str)
 
         location_props = {
             "lat": ["lat", "LAT", "latitude", "LATITUDE"],

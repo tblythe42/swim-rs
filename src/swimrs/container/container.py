@@ -696,6 +696,39 @@ class SwimContainer:
     # Index Access Helpers
     # -------------------------------------------------------------------------
 
+    def report(self, config=None, raise_on_fail=False, output_dir=None):
+        """Generate container health report.
+
+        Args:
+            config: Dict or ProjectConfig with mask_mode, etf_target_model, etc.
+            raise_on_fail: Raise ContainerHealthError on FAIL results.
+            output_dir: If set, write health.json, health.html, health.png here.
+
+        Returns:
+            HealthReport
+        """
+        # Extract config dict from ProjectConfig if needed
+        if config is not None and not isinstance(config, dict):
+            config_dict = {}
+            for attr in (
+                "mask_mode",
+                "etf_target_model",
+                "etf_ensemble_members",
+                "met_source",
+                "snow_source",
+            ):
+                val = getattr(config, attr, None)
+                if val is not None:
+                    config_dict[attr] = val
+        else:
+            config_dict = config
+
+        return self._inventory.report(
+            config=config_dict,
+            raise_on_fail=raise_on_fail,
+            output_dir=output_dir,
+        )
+
     def get_field_index(self, uid: str) -> int:
         """Get the array index for a field UID."""
         if uid not in self._uid_to_index:

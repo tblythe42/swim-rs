@@ -263,6 +263,21 @@ class ValidationResult:
         return "\n".join(lines)
 
 
+class ContainerHealthError(Exception):
+    """Raised when a container fails health checks."""
+
+    def __init__(self, report=None, message=None):
+        self.report = report
+        if message:
+            super().__init__(message)
+        elif report:
+            from swimrs.container.health import ContainerHealthError as _CHE
+
+            super().__init__(str(_CHE(report)))
+        else:
+            super().__init__("Container health check failed")
+
+
 class Inventory:
     """
     Tracks what data exists in a SwimContainer and provides coverage statistics.
@@ -517,3 +532,43 @@ class Inventory:
             )
 
         return suggestions
+
+    def report(self, config=None, raise_on_fail=False, output_dir=None):
+        """Generate container health report.
+
+        Args:
+            config: Dict with mask_mode, etf_target_model, etc.
+            raise_on_fail: Raise ContainerHealthError on FAIL results.
+            output_dir: If set, write health.json, health.html, health.png here.
+
+        Returns:
+            HealthReport
+        """
+        from swimrs.container.health import (
+            ContainerHealthCheck,
+            render_html_report,
+            render_summary_png,
+        )
+
+        config_dict = config if isinstance(config, dict) else {}
+        checker = ContainerHealthCheck(self._root, self._field_uids, config=config_dict)
+        report = checker.run()
+
+        print(report.summary())
+
+        if output_dir:
+            from pathlib import Path
+
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            report.write_json(out / "health.json")
+            render_html_report(report, out / "health.html")
+            try:
+                render_summary_png(report, out / "health.png")
+            except Exception as e:
+                print(f"Warning: could not render health.png: {e}")
+
+        if raise_on_fail and not report.passed:
+            raise ContainerHealthError(report)
+
+        return report

@@ -41,6 +41,7 @@ dependencies = [
   "pyarrow",
   "netcdf4>=1.7.4",
   "refet>=0.4.2",
+  "jinja2",
 ]
 
 [project.optional-dependencies]

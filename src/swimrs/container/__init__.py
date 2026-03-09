@@ -62,6 +62,13 @@ from swimrs.container.container import (
     create_container,
     open_container,
 )
+from swimrs.container.health import (
+    CheckResult,
+    ContainerHealthCheck,
+    ContainerHealthError,
+    HealthPolicy,
+    HealthReport,
+)
 from swimrs.container.logging import (
     ContainerLogger,
     configure_logging,
@@ -125,6 +132,12 @@ __all__ = [
     "ContainerLogger",
     "get_logger",
     "configure_logging",
+    # Health checking
+    "HealthReport",
+    "HealthPolicy",
+    "ContainerHealthCheck",
+    "ContainerHealthError",
+    "CheckResult",
     # Enums
     "Instrument",
     "MaskType",
