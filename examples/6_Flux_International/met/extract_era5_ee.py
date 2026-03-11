@@ -54,12 +54,17 @@ WIND_10M_TO_2M = 4.87 / np.log(67.8 * 10 - 5.42)
 
 
 def get_unique_stations():
-    """Get deduplicated station IDs from selected_stations.json."""
+    """Get deduplicated ISD station IDs from selected_stations.json.
+
+    Only returns stations from sites with source=="isd" (EU/AU sites).
+    MADIS stations are all CONUS and handled by extract_era5_at_stations.py.
+    """
     with open(SELECTED) as f:
         selected = json.load(f)
     stations = set()
     for site_data in selected.values():
-        stations.update(site_data["stations"])
+        if site_data.get("source", "isd") == "isd":
+            stations.update(site_data["stations"])
     return sorted(stations)
 
 

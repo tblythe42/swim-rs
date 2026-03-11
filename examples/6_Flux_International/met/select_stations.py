@@ -1,21 +1,16 @@
-"""Select 20 nearest ISD stations per flux site for ERA5-Land bias correction.
+"""Select nearest ag-met stations per flux site for ERA5-Land bias correction.
 
-For each flux site, find 20 nearest NOAA ISD stations that:
-  - Have >365 days of tmax, tmin, dewpoint, and wind speed data
-  - Have valid elevation metadata
-  - Are on cropland per FROM-GLC10 (200m zonal mode) [optional]
+Two-source pipeline:
+  - CONUS/CA flux sites: MADIS cropland stations (with measured rsds)
+  - EU/AU flux sites: ISD cropland stations (GLC10-filtered)
 
-Two-phase workflow:
-  1. python select_stations.py --export-lc     # Submit EE export task
-  2. python select_stations.py --glc10-csv <path>  # Use exported CSV to filter + select
+Both pools require mandatory GLC10 cropland filtering (mode==10).
 
-Or skip land cover:
-  python select_stations.py --skip-lc
+Usage:
+    python select_stations.py
 """
 
-import argparse
 import json
-import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -24,32 +19,94 @@ import pandas as pd
 from pyproj import Geod
 
 FLUX_SHP = "/data/ssd1/swim/6_Flux_International/data/gis/flux_intl_buffers_150m_06JAN2026.shp"
+
+# MADIS
+MADIS_GLC10_CSV = Path(__file__).parent / "madis_glc10_cropland.csv"
+MADIS_POR_DIR = Path("/data/ssd2/madis/station_por")
+
+# ISD
+ISD_GLC10_CSV = Path(__file__).parent / "isd_glc10_cropland.csv"
 ISD_STATIONS = "/nas/climate/isd/indices/stations.parquet"
 ISD_COVERAGE = "/nas/climate/isd/indices/daily_coverage.shp"
+
 OUT_DIR = Path(__file__).parent
 OUT_FILE = OUT_DIR / "selected_stations.json"
 
 # FROM-GLC10 cropland class
 GLC10_CROPLAND = 10
-GCS_BUCKET = "wudr"
-N_NEIGHBORS = 20
-
+N_NEIGHBORS = 10
 MIN_OBS_DAYS = 365
+
+# NC domain bounds (CONUS)
+NC_LAT_MIN = 22.2
+NC_LAT_MAX = 60.4
+NC_LON_MIN = -129.6
+NC_LON_MAX = -63.0
+
+
+def in_nc_domain(lat, lon):
+    """Check if a point is inside the CONUS NC grid domain."""
+    return NC_LAT_MIN <= lat <= NC_LAT_MAX and NC_LON_MIN <= lon <= NC_LON_MAX
 
 
 def load_flux_sites():
-    """Load all flux sites (global)."""
-    return gpd.read_file(FLUX_SHP, engine="fiona")
+    """Load all flux sites and partition into CONUS/CA vs EU/AU."""
+    flux = gpd.read_file(FLUX_SHP, engine="fiona")
+    conus = flux[flux.apply(lambda r: in_nc_domain(r["lat"], r["lon"]), axis=1)]
+    exconus = flux[~flux.index.isin(conus.index)]
+    return conus, exconus
 
 
-def filter_isd_stations():
-    """Filter ISD stations to those with sufficient coverage and valid elevation."""
+def load_madis_cropland_pool():
+    """Load MADIS cropland stations with >365 days of rsds and eto.
+
+    Returns DataFrame with columns: fid, latitude, longitude, elevation,
+    rsds_count, eto_count.
+    """
+    glc10 = pd.read_csv(MADIS_GLC10_CSV)
+    glc10["mode"] = pd.to_numeric(glc10["mode"], errors="coerce")
+    cropland_fids = set(glc10[glc10["mode"].round() == GLC10_CROPLAND]["fid"])
+    print(f"    {len(cropland_fids)} MADIS stations on cropland (mode==10)")
+
+    records = []
+    for i, fid in enumerate(sorted(cropland_fids)):
+        path = MADIS_POR_DIR / f"{fid}.parquet"
+        if not path.exists():
+            continue
+        df = pd.read_parquet(path, columns=["rsds", "eto", "latitude", "longitude", "elevation"])
+        rsds_n = int(df["rsds"].notna().sum())
+        eto_n = int(df["eto"].notna().sum())
+        if rsds_n >= MIN_OBS_DAYS and eto_n >= MIN_OBS_DAYS:
+            records.append(
+                {
+                    "fid": fid,
+                    "latitude": float(df["latitude"].iloc[0]),
+                    "longitude": float(df["longitude"].iloc[0]),
+                    "elevation": float(df["elevation"].iloc[0]),
+                    "rsds_count": rsds_n,
+                    "eto_count": eto_n,
+                }
+            )
+        if (i + 1) % 500 == 0:
+            print(f"    scanned {i + 1}/{len(cropland_fids)} parquets...")
+
+    pool = pd.DataFrame(records)
+    print(f"    {len(pool)} MADIS stations with >{MIN_OBS_DAYS} days rsds and eto")
+    return pool
+
+
+def load_isd_cropland_pool():
+    """Load ISD cropland stations outside NC domain with sufficient coverage.
+
+    Returns DataFrame with columns: station_id, lat, lon, elev_m.
+    """
+    glc10 = pd.read_csv(ISD_GLC10_CSV)
+    glc10["mode"] = pd.to_numeric(glc10["mode"], errors="coerce")
+    cropland_sids = set(glc10[glc10["mode"].round() == GLC10_CROPLAND]["station_id"])
+    print(f"    {len(cropland_sids)} ISD stations on cropland (mode==10)")
+
+    # Filter by coverage
     coverage = gpd.read_file(ISD_COVERAGE, engine="fiona")
-    stations = pd.read_parquet(ISD_STATIONS)
-
-    print(f"    {len(coverage)} stations in coverage shapefile")
-    print(f"    {len(stations)} stations in metadata parquet")
-
     mask = (
         (coverage["n_tmax_c"] > MIN_OBS_DAYS)
         & (coverage["n_tmin_c"] > MIN_OBS_DAYS)
@@ -57,115 +114,37 @@ def filter_isd_stations():
         & (coverage["n_wind_spe"] > MIN_OBS_DAYS)
     )
     coverage = coverage[mask].copy()
-    print(f"    {len(coverage)} pass observation count filters (>{MIN_OBS_DAYS} days each var)")
+    print(f"    {len(coverage)} ISD stations pass coverage filters")
 
+    # Intersect with cropland
+    coverage = coverage[coverage["station_id"].isin(cropland_sids)].copy()
+    print(f"    {len(coverage)} after cropland intersection")
+
+    # Join with metadata for lat/lon/elev
+    stations = pd.read_parquet(ISD_STATIONS)
     merged = coverage.merge(
         stations[["station_id", "lat", "lon", "elev_m"]],
         on="station_id",
         how="inner",
     )
     merged = merged[merged["elev_m"].notna()].copy()
-    print(f"    {len(merged)} with valid elevation after metadata merge")
+    print(f"    {len(merged)} with valid elevation")
 
-    return merged
+    # Filter to outside NC domain (EU/AU only)
+    outside = merged[~merged.apply(lambda r: in_nc_domain(r["lat"], r["lon"]), axis=1)].copy()
+    print(f"    {len(outside)} outside NC domain (EU/AU)")
 
-
-def export_glc10_task(stations_gdf, bucket=GCS_BUCKET, buffer_m=200, batch_size=2500):
-    """Submit batched EE export tasks: GLC10 200m zonal mode at candidate stations.
-
-    Parameters
-    ----------
-    stations_gdf : GeoDataFrame
-        Must have 'station_id', 'lat', 'lon' columns.
-    bucket : str
-        GCS bucket for export.
-    buffer_m : int
-        Buffer radius (m) for zonal mode (default 200).
-    batch_size : int
-        Max stations per EE task (default 2500).
-    """
-    import ee
-
-    ee.Initialize()
-
-    glc10 = ee.ImageCollection("projects/sat-io/open-datasets/FROM-GLC10").mosaic()
-
-    n = len(stations_gdf)
-    n_batches = (n + batch_size - 1) // batch_size
-    print(f"  {n} stations -> {n_batches} export tasks ({batch_size}/batch)")
-
-    sids = stations_gdf["station_id"].values
-    lats = stations_gdf["lat"].values
-    lons = stations_gdf["lon"].values
-
-    for b in range(n_batches):
-        start = b * batch_size
-        end = min(start + batch_size, n)
-
-        features = []
-        for i in range(start, end):
-            pt = ee.Geometry.Point([float(lons[i]), float(lats[i])])
-            feat = ee.Feature(pt, {"station_id": sids[i]})
-            features.append(feat)
-
-        fc = ee.FeatureCollection(features)
-        fc_buffered = fc.map(lambda f: f.setGeometry(f.geometry().buffer(buffer_m)))
-        result = glc10.reduceRegions(
-            collection=fc_buffered,
-            reducer=ee.Reducer.mode(),
-            scale=30,
-        )
-        result_flat = result.map(lambda f: f.setGeometry(None))
-
-        desc = f"isd_glc10_cropland_{b:02d}"
-        task = ee.batch.Export.table.toCloudStorage(
-            collection=result_flat,
-            description=desc,
-            bucket=bucket,
-            fileNamePrefix=desc,
-            fileFormat="CSV",
-        )
-        task.start()
-
-        status = task.status()
-        print(
-            f"    batch {b + 1}/{n_batches}: {end - start} stations -> {desc} ({status['id'][:8]}...)"
-        )
-
-    print("\n  Monitor: https://code.earthengine.google.com/tasks")
-    print(f"  Output: gs://{bucket}/isd_glc10_cropland_*.csv")
-    print("\n  When all tasks complete, download and merge:")
-    print(f"    gsutil cp 'gs://{bucket}/isd_glc10_cropland_*.csv' {OUT_DIR}/")
-    cat_cmd = f"head -1 {OUT_DIR}/isd_glc10_cropland_00.csv > {OUT_DIR}/isd_glc10_cropland.csv"
-    cat_cmd += (
-        f" && tail -n +2 -q {OUT_DIR}/isd_glc10_cropland_*.csv >> {OUT_DIR}/isd_glc10_cropland.csv"
-    )
-    print(f"    {cat_cmd}")
-    print(f"    python {__file__} --glc10-csv {OUT_DIR}/isd_glc10_cropland.csv")
+    return outside
 
 
-def load_glc10_cropland_sids(csv_path):
-    """Read exported GLC10 CSV, return set of station_ids on cropland."""
-    df = pd.read_csv(csv_path)
-    df["mode"] = pd.to_numeric(df["mode"], errors="coerce")
-    has_lc = df["mode"].notna()
-    # EE mode reducer returns float with precision noise; round to int
-    cropland = df[has_lc & (df["mode"].round() == GLC10_CROPLAND)]
-    n_nodata = (~has_lc).sum()
-    print(
-        f"    {len(df)} stations in CSV, {n_nodata} with no GLC10 data, {len(cropland)} on cropland"
-    )
-    return set(cropland["station_id"])
-
-
-def find_nearest(flux_sites, stations, n=N_NEIGHBORS):
-    """For each flux site, find n nearest qualifying stations by geodesic distance."""
+def find_nearest(flux_sites, stations, station_id_col, lat_col, lon_col, source, n=N_NEIGHBORS):
+    """For each flux site, find n nearest stations by geodesic distance."""
     geod = Geod(ellps="WGS84")
     result = {}
 
-    s_lons = stations["lon"].values
-    s_lats = stations["lat"].values
-    s_sids = stations["station_id"].values
+    s_lons = stations[lon_col].values
+    s_lats = stations[lat_col].values
+    s_sids = stations[station_id_col].values
 
     for _, site in flux_sites.iterrows():
         _, _, dists = geod.inv(
@@ -175,64 +154,58 @@ def find_nearest(flux_sites, stations, n=N_NEIGHBORS):
             s_lats,
         )
         dists_km = np.abs(dists) / 1000.0
-        idx = np.argsort(dists_km)[:n]
+        k = min(n, len(s_sids))
+        idx = np.argsort(dists_km)[:k]
         result[site["sid"]] = {
             "stations": s_sids[idx].tolist(),
             "distances_km": [round(dists_km[i], 2) for i in idx],
+            "source": source,
         }
 
     return result
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--export-lc", action="store_true", help="Submit EE export task for GLC10 zonal mode"
-    )
-    group.add_argument("--glc10-csv", type=str, help="Path to exported GLC10 CSV from EE")
-    group.add_argument("--skip-lc", action="store_true", help="Skip land cover check entirely")
-    args = parser.parse_args()
-
     print("Loading flux sites...")
-    flux_sites = load_flux_sites()
-    print(f"  {len(flux_sites)} sites")
+    conus_sites, exconus_sites = load_flux_sites()
+    print(f"  {len(conus_sites)} CONUS/CA sites, {len(exconus_sites)} EU/AU sites")
 
-    print("Filtering ISD stations...")
-    stations = filter_isd_stations()
-    print(f"  {len(stations)} ISD stations pass filters")
+    # --- CONUS/CA pass: MADIS ---
+    print("\nLoading MADIS cropland station pool...")
+    madis_pool = load_madis_cropland_pool()
 
-    # --- Phase 1: export only ---
-    if args.export_lc:
-        print("\nSubmitting EE export task for GLC10 land cover...")
-        export_glc10_task(stations)
-        sys.exit(0)
+    print(f"\nFinding {N_NEIGHBORS} nearest MADIS stations per CONUS/CA site...")
+    conus_selected = find_nearest(
+        conus_sites, madis_pool, "fid", "latitude", "longitude", source="madis"
+    )
 
-    # --- Phase 2 or skip: filter + select ---
-    if args.glc10_csv:
-        print(f"\nFiltering to GLC10 cropland from {args.glc10_csv}...")
-        cropland_sids = load_glc10_cropland_sids(args.glc10_csv)
-        stations = stations[stations["station_id"].isin(cropland_sids)].copy()
-        print(f"  {len(stations)} stations after cropland filter")
-    elif not args.skip_lc:
-        print("ERROR: specify --export-lc, --glc10-csv <path>, or --skip-lc")
-        sys.exit(1)
+    # --- EU/AU pass: ISD ---
+    print("\nLoading ISD cropland station pool...")
+    isd_pool = load_isd_cropland_pool()
 
-    print(f"\nFinding {N_NEIGHBORS} nearest stations per flux site...")
-    selected = find_nearest(flux_sites, stations)
+    print(f"\nFinding {N_NEIGHBORS} nearest ISD stations per EU/AU site...")
+    exconus_selected = find_nearest(
+        exconus_sites, isd_pool, "station_id", "lat", "lon", source="isd"
+    )
+
+    # Merge
+    selected = {}
+    selected.update(conus_selected)
+    selected.update(exconus_selected)
 
     for sid, data in sorted(selected.items()):
         dists = data["distances_km"]
         nearest = f"{dists[0]:.0f}" if dists else "N/A"
         farthest = f"{dists[-1]:.0f}" if dists else "N/A"
-        print(f"    {sid}: nearest={nearest} km, farthest={farthest} km")
+        print(f"    {sid} ({data['source']}): nearest={nearest} km, farthest={farthest} km")
 
     print(f"\nWriting {OUT_FILE}")
     with open(OUT_FILE, "w") as f:
         json.dump(selected, f, indent=2)
 
-    n_with = sum(1 for v in selected.values() if v["stations"])
-    print(f"  {n_with} sites with stations, {len(selected) - n_with} without")
+    n_madis = sum(1 for v in selected.values() if v["source"] == "madis")
+    n_isd = sum(1 for v in selected.values() if v["source"] == "isd")
+    print(f"  {n_madis} MADIS sites, {n_isd} ISD sites")
 
 
 if __name__ == "__main__":

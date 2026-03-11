@@ -1,8 +1,12 @@
-"""Extract ERA5-Land variables at ISD station locations and compute PM-ETo.
+"""Extract ERA5-Land variables at station locations and compute PM-ETo.
 
 Reads raw ERA5-Land NetCDF files, extracts nearest-neighbor time series at
-each selected ISD station, applies unit conversions, and computes ASCE
-standardized reference ET using the refet package.
+each selected station (MADIS or ISD), applies unit conversions, and computes
+ASCE standardized reference ET using the refet package.
+
+Handles both MADIS and ISD station metadata via the source field in
+selected_stations.json. Out-of-domain (EU/AU) stations are skipped with a
+log message pointing to extract_era5_ee.py.
 
 Output: one CSV per station in met/era5_extractions/{station_id}.csv
 
@@ -20,6 +24,7 @@ import xarray as xr
 
 SELECTED = Path(__file__).parent / "selected_stations.json"
 ISD_STATIONS = "/nas/climate/isd/indices/stations.parquet"
+MADIS_POR_DIR = Path("/data/ssd2/madis/station_por")
 NC_DIR = Path("/data/ssd1/era5-land/era5_nc_daily_1990-2024")
 OUT_DIR = Path(__file__).parent / "era5_extractions"
 
@@ -43,24 +48,49 @@ NC_FILES = {
 WIND_10M_TO_2M = 4.87 / np.log(67.8 * 10 - 5.42)
 
 
-def get_unique_stations():
-    """Get deduplicated station IDs from selected_stations.json."""
+def get_unique_stations_by_source():
+    """Get deduplicated station IDs grouped by source from selected_stations.json."""
     with open(SELECTED) as f:
         selected = json.load(f)
-    stations = set()
+    madis_ids = set()
+    isd_ids = set()
     for site_data in selected.values():
-        stations.update(site_data["stations"])
-    return sorted(stations)
+        source = site_data.get("source", "isd")
+        if source == "madis":
+            madis_ids.update(site_data["stations"])
+        else:
+            isd_ids.update(site_data["stations"])
+    return sorted(madis_ids), sorted(isd_ids)
 
 
-def get_station_meta(station_ids):
-    """Get lat/lon/elev for station IDs from ISD stations parquet."""
+def get_isd_station_meta(station_ids):
+    """Get lat/lon/elev for ISD station IDs from metadata parquet."""
     stations = pd.read_parquet(ISD_STATIONS)
     stations = stations.set_index("station_id")
     stations = stations.rename(
         columns={"lat": "latitude", "lon": "longitude", "elev_m": "elevation"}
     )
     return stations.loc[stations.index.isin(station_ids), ["latitude", "longitude", "elevation"]]
+
+
+def get_madis_station_meta(station_ids):
+    """Get lat/lon/elev for MADIS station IDs from their parquets."""
+    records = []
+    for fid in station_ids:
+        path = MADIS_POR_DIR / f"{fid}.parquet"
+        if not path.exists():
+            continue
+        df = pd.read_parquet(path, columns=["latitude", "longitude", "elevation"])
+        records.append(
+            {
+                "station_id": fid,
+                "latitude": float(df["latitude"].iloc[0]),
+                "longitude": float(df["longitude"].iloc[0]),
+                "elevation": float(df["elevation"].iloc[0]),
+            }
+        )
+    meta = pd.DataFrame(records).set_index("station_id")
+    return meta
 
 
 def extract_nc(nc_stem, lats, lons, station_ids):
@@ -110,28 +140,36 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Loading selected stations...")
-    station_ids = get_unique_stations()
-    print(f"  {len(station_ids)} unique stations")
+    madis_ids, isd_ids = get_unique_stations_by_source()
+    print(f"  {len(madis_ids)} MADIS stations, {len(isd_ids)} ISD stations")
 
-    meta = get_station_meta(station_ids)
-    station_ids = [s for s in station_ids if s in meta.index]
-    print(f"  {len(station_ids)} stations with metadata")
+    # MADIS stations are all CONUS — extract from NC
+    madis_meta = get_madis_station_meta(madis_ids)
+    madis_ids = [s for s in madis_ids if s in madis_meta.index]
+    print(f"  {len(madis_ids)} MADIS stations with metadata")
 
-    # Partition into in-domain (CONUS NC grid) vs out-of-domain
-    in_domain = []
-    out_domain = []
-    for sid in station_ids:
-        lat = meta.loc[sid, "latitude"]
-        lon = meta.loc[sid, "longitude"]
+    # ISD stations: partition in-domain vs out-of-domain
+    isd_meta = get_isd_station_meta(isd_ids)
+    isd_ids = [s for s in isd_ids if s in isd_meta.index]
+    isd_in_domain = []
+    isd_out_domain = []
+    for sid in isd_ids:
+        lat = isd_meta.loc[sid, "latitude"]
+        lon = isd_meta.loc[sid, "longitude"]
         if NC_LAT_MIN <= lat <= NC_LAT_MAX and NC_LON_MIN <= lon <= NC_LON_MAX:
-            in_domain.append(sid)
+            isd_in_domain.append(sid)
         else:
-            out_domain.append(sid)
+            isd_out_domain.append(sid)
 
-    if out_domain:
-        print(f"  {len(out_domain)} stations outside CONUS NC domain — use extract_era5_ee.py")
-    station_ids = in_domain
-    print(f"  {len(station_ids)} in-domain stations for NC extraction")
+    if isd_out_domain:
+        print(f"  {len(isd_out_domain)} ISD stations outside NC domain — use extract_era5_ee.py")
+    if isd_in_domain:
+        print(f"  {len(isd_in_domain)} ISD stations in-domain for NC extraction")
+
+    # Combine all in-domain stations (MADIS + in-domain ISD)
+    station_ids = madis_ids + isd_in_domain
+    meta = pd.concat([madis_meta, isd_meta])
+    print(f"  {len(station_ids)} total in-domain stations for NC extraction")
 
     lats = meta.loc[station_ids, "latitude"].values
     lons = meta.loc[station_ids, "longitude"].values

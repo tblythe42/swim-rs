@@ -27,7 +27,7 @@ OUT_FILE = Path(__file__).parent / "correction_factors.json"
 
 RATIO_VARS = ["eto", "rsds", "u2", "vpd"]
 DELTA_VARS = ["tmean"]
-MIN_DAYS = 10  # minimum days per station-month for a valid ratio
+MIN_DAYS = 30  # minimum days per station-month for a valid ratio
 RATIO_LO = 0.5  # per-month ratio floor
 RATIO_HI = 1.5  # per-month ratio ceiling
 
