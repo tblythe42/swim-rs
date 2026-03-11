@@ -145,6 +145,108 @@ class Calculator(Component):
         """Deprecated: Use merged_ndvi() instead."""
         return self.merged_ndvi(*args, **kwargs)
 
+    def ndvi_climatology(
+        self,
+        source_container=None,
+        masks: tuple[str, ...] = ("irr", "inv_irr"),
+        overwrite: bool = False,
+    ) -> ProvenanceEvent:
+        """Compute per-DOY median NDVI climatology from merged NDVI.
+
+        Groups the merged NDVI time series by day-of-year (1-366) and
+        computes the median across years for each field. The result is a
+        (366, n_fields) array stored at ``derived/ndvi_climatology/{mask}``.
+
+        This climatology is used as the NDVI input for forecast containers
+        where no observed NDVI is available.
+
+        Args:
+            source_container: Optional SwimContainer to read merged NDVI
+                from. If None, reads from the current container.
+            masks: Mask types to compute climatology for.
+            overwrite: If True, replace existing climatology arrays.
+
+        Returns:
+            ProvenanceEvent recording the operation.
+        """
+        self._ensure_writable()
+
+        src = source_container if source_container is not None else self._container
+
+        with self._track_operation(
+            "compute_ndvi_climatology",
+            target="derived/ndvi_climatology",
+        ) as ctx:
+            total_records = 0
+
+            for mask in masks:
+                out_path = f"derived/ndvi_climatology/{mask}"
+                if out_path in self._state.root and not overwrite:
+                    self._log.debug("skipping_existing", path=out_path)
+                    continue
+                if out_path in self._state.root:
+                    self._safe_delete_path(out_path)
+
+                # Read merged NDVI from source
+                merged_path = f"derived/merged_ndvi/{mask}"
+                raw_path = f"remote_sensing/ndvi/landsat/{mask}"
+                src_root = src._root if src is not None else self._state.root
+                if merged_path in src_root:
+                    da = src.to_xarray(merged_path)
+                elif raw_path in src_root:
+                    da = src.to_xarray(raw_path)
+                else:
+                    self._log.warning("no_ndvi_for_climatology", mask=mask)
+                    continue
+
+                # Group by DOY, compute median
+                doy = da.coords["time"].dt.dayofyear
+                clim = da.groupby(doy).median(dim="time")  # shape (366, n_fields)
+
+                # Ensure all 366 DOYs are present
+                all_doys = np.arange(1, 367)
+                clim = clim.reindex(dayofyear=all_doys)
+
+                # Interpolate any missing DOYs
+                clim = clim.interpolate_na(dim="dayofyear", method="linear")
+                clim = clim.bfill(dim="dayofyear").ffill(dim="dayofyear")
+
+                clim_values = clim.values.astype(np.float32)
+
+                # Write (366, n_fields) array
+                parent_path = "/".join(out_path.split("/")[:-1])
+                name = out_path.split("/")[-1]
+                parent = self._state.root
+                for part in parent_path.split("/"):
+                    if part not in parent:
+                        parent = parent.create_group(part)
+                    else:
+                        parent = parent[part]
+
+                parent.create_array(
+                    name,
+                    data=clim_values,
+                    chunks=(366, min(100, clim_values.shape[1])),
+                    dtype="float32",
+                )
+
+                total_records += int(np.count_nonzero(~np.isnan(clim_values)))
+
+            ctx["records_processed"] = total_records
+            ctx["fields_processed"] = self._state.n_fields
+
+            event = self._state.provenance.record(
+                "compute",
+                target="derived/ndvi_climatology",
+                params={"masks": list(masks)},
+                records_count=total_records,
+            )
+
+            self._state.mark_modified()
+            self._state.refresh()
+
+            return event
+
     def dynamics(
         self,
         etf_model: str = "ssebop",
@@ -332,6 +434,158 @@ class Calculator(Component):
                     continue
 
         return results
+
+    def compute_irr_data(
+        self,
+        irr_threshold: float = 0.1,
+        masks: tuple[str, ...] = ("irr", "inv_irr"),
+        use_mask: bool = True,
+        lookback: int = 10,
+        ndvi_threshold: float = 0.3,
+        min_pos_days: int = 10,
+        overwrite: bool = False,
+    ) -> ProvenanceEvent:
+        """Compute irrigation windows (irr_data) from NDVI only.
+
+        Unlike ``dynamics()``, this does NOT require ETf data. It uses
+        NDVI slope analysis and per-year irrigation properties to detect
+        irrigation periods. Intended for hindcast/forecast containers
+        where ETf observations are unavailable.
+
+        ke_max, kc_max, and gwsub_data are expected to already exist
+        (copied from the calibration container).
+
+        Args:
+            irr_threshold: f_irr threshold for classifying irrigated years.
+            masks: Mask types to process.
+            use_mask: If True, use irrigation mask properties (CONUS mode).
+            lookback: Days of lookback for window extension.
+            ndvi_threshold: NDVI threshold for window extension.
+            min_pos_days: Minimum consecutive positive slope days.
+            overwrite: If True, replace existing irr_data.
+        """
+        import xarray as xr
+
+        self._ensure_writable()
+
+        fused_path = f"derived/merged_ndvi/{masks[0]}"
+        if fused_path not in self._state.root:
+            raise ValueError(
+                f"Merged NDVI not found at '{fused_path}'. "
+                "Ingest or tile NDVI before computing irrigation windows."
+            )
+
+        with self._track_operation(
+            "compute_irr_data",
+            target="derived/dynamics/irr_data",
+        ) as ctx:
+            fields = self._state.field_uids
+
+            # Load NDVI from all masks and combine
+            ndvi_data = None
+            for mask in masks:
+                path = f"derived/merged_ndvi/{mask}"
+                if path not in self._state.root:
+                    continue
+                mask_ndvi = self._state.get_xarray(path, fields=fields)
+                if ndvi_data is None:
+                    ndvi_data = mask_ndvi
+                else:
+                    ndvi_data = ndvi_data.fillna(mask_ndvi)
+
+            if ndvi_data is None:
+                self._log.warning("no_ndvi_data")
+                return self._state.provenance.record(
+                    "compute",
+                    target="derived/dynamics/irr_data",
+                    params={},
+                    records_count=0,
+                    success=True,
+                )
+
+            # Build a minimal dataset with dummy met so
+            # _compute_irrigation_data can be reused (it only accesses
+            # etf/eto/prcp in the use_lulc branch, not use_mask).
+            dummy = xr.full_like(ndvi_data, np.nan)
+            ds = xr.Dataset(
+                {
+                    "ndvi": ndvi_data,
+                    "etf": dummy,
+                    "eto": dummy,
+                    "prcp": dummy,
+                }
+            )
+
+            irr_props = self._get_yearly_irrigation_properties() if use_mask else None
+
+            # Project f_irr into years not covered by irr_yearly
+            # (e.g. forecast 2026-2100 or hindcast years beyond the
+            # irrigation product). Uses median of last 5 available years.
+            if irr_props:
+                target_years = sorted(pd.DatetimeIndex(ds.coords["time"].values).year.unique())
+                irr_props = _extend_irr_props(irr_props, target_years)
+
+            irr_data = self._compute_irrigation_data(
+                ds,
+                irr_threshold,
+                lookback,
+                ndvi_threshold,
+                min_pos_days,
+                use_mask=use_mask,
+                use_lulc=False,
+                irr_props=irr_props,
+            )
+
+            # Write irr_data only
+            self._write_irr_data(irr_data, fields, overwrite)
+
+            ctx["records_processed"] = len(fields)
+            ctx["fields_processed"] = len(fields)
+
+            event = self._state.provenance.record(
+                "compute",
+                target="derived/dynamics/irr_data",
+                params={
+                    "irr_threshold": irr_threshold,
+                    "masks": list(masks),
+                    "use_mask": use_mask,
+                },
+                fields_affected=fields,
+                records_count=len(fields),
+            )
+
+            self._state.mark_modified()
+            self._state.refresh()
+
+            return event
+
+    def _write_irr_data(
+        self,
+        irr_data: dict[str, dict],
+        fields: list[str],
+        overwrite: bool,
+    ) -> None:
+        """Write only irr_data to derived/dynamics/irr_data."""
+        from zarr.core.dtype import VariableLengthUTF8
+
+        irr_path = "derived/dynamics/irr_data"
+        if irr_path in self._state.root and not overwrite:
+            return
+        if irr_path in self._state.root:
+            self._safe_delete_path(irr_path)
+
+        parent = self._state.ensure_group("derived/dynamics")
+        arr = parent.create_array(
+            "irr_data",
+            shape=(self._state.n_fields,),
+            dtype=VariableLengthUTF8(),
+        )
+        values = [""] * self._state.n_fields
+        for field_uid in fields:
+            if field_uid in self._state._uid_to_index and field_uid in irr_data:
+                idx = self._state._uid_to_index[field_uid]
+                values[idx] = json.dumps(irr_data[field_uid])
+        arr[:] = values
 
     # -------------------------------------------------------------------------
     # Helper Methods
@@ -1171,3 +1425,45 @@ class Calculator(Component):
                     idx = self._state._uid_to_index[field_uid]
                     values[idx] = json.dumps(gwsub_data[field_uid])
             arr[:] = values
+
+
+def _extend_irr_props(
+    irr_props: dict[str, dict[str, float]],
+    target_years: list[int],
+    n_recent: int = 5,
+) -> dict[str, dict[str, float]]:
+    """Extend per-year irrigation fractions to cover target years.
+
+    For years not present in the irrigation product (e.g. forecast
+    2026-2100), uses the median f_irr from the last *n_recent*
+    available years as a projection.  This prevents all future years
+    from collapsing to non-irrigated.
+
+    Args:
+        irr_props: {site_id: {year_str: f_irr, ...}, ...}
+        target_years: All years in the target container.
+        n_recent: Number of recent years to use for median projection.
+
+    Returns:
+        Updated irr_props with projected years filled in.
+    """
+    target_year_strs = {str(y) for y in target_years}
+
+    for site, yearly in irr_props.items():
+        available_years = sorted(yearly.keys())
+        if not available_years:
+            continue
+
+        missing = target_year_strs - set(available_years)
+        if not missing:
+            continue
+
+        # Median f_irr from last n_recent years
+        recent = available_years[-n_recent:]
+        recent_vals = [yearly[y] for y in recent]
+        projected = float(np.median(recent_vals))
+
+        for yr_str in missing:
+            yearly[yr_str] = projected
+
+    return irr_props

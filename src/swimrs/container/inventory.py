@@ -263,21 +263,6 @@ class ValidationResult:
         return "\n".join(lines)
 
 
-class ContainerHealthError(Exception):
-    """Raised when a container fails health checks."""
-
-    def __init__(self, report=None, message=None):
-        self.report = report
-        if message:
-            super().__init__(message)
-        elif report:
-            from swimrs.container.health import ContainerHealthError as _CHE
-
-            super().__init__(str(_CHE(report)))
-        else:
-            super().__init__("Container health check failed")
-
-
 class Inventory:
     """
     Tracks what data exists in a SwimContainer and provides coverage statistics.
@@ -546,13 +531,37 @@ class Inventory:
         """
         from swimrs.container.health import (
             ContainerHealthCheck,
+            ContainerHealthError,
             render_html_report,
             render_summary_png,
         )
 
+        if config is not None and not isinstance(config, dict):
+            raise TypeError(
+                f"config must be a dict or None, got {type(config).__name__}. "
+                "Use SwimContainer.report() to pass a ProjectConfig directly."
+            )
+
         config_dict = config if isinstance(config, dict) else {}
         checker = ContainerHealthCheck(self._root, self._field_uids, config=config_dict)
         report = checker.run()
+
+        # Store health check summary in container attrs for downstream gates
+        try:
+            from datetime import UTC, datetime
+
+            self._root.attrs["last_health_check"] = {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "fingerprint": report.container_fingerprint,
+                "passed": report.passed,
+                "n_checks": len(report.checks),
+                "n_fail": len(report.failures),
+                "n_warn": len(report.warnings),
+                "policy_version": report.policy_version,
+                "config_hash": report.config_hash,
+            }
+        except Exception:
+            pass  # read-only container or other write failure
 
         print(report.summary())
 

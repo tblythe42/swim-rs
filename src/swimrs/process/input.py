@@ -443,6 +443,7 @@ def build_swim_input(
     fields: list[str] | None = None,
     empirical_kc_max: bool = False,
     mask_mode: str = "irrigation",
+    ndvi_mode: str = "observed",
 ) -> SwimInput:
     """Build HDF5 input file from SwimContainer.
 
@@ -481,6 +482,10 @@ def build_swim_input(
         NDVI masking strategy: ``"none"`` uses only ``no_mask`` NDVI,
         ``"irrigation"`` uses ``irr``/``inv_irr`` with year-based switching.
         Raises if the requested NDVI mask is not in the container.
+    ndvi_mode : str
+        ``"observed"`` (default) reads time-series NDVI from the container.
+        ``"climatology"`` reads ``derived/ndvi_climatology/{mask}`` and
+        tiles the 366-day cycle across the simulation period.
 
     Returns
     -------
@@ -528,6 +533,7 @@ def build_swim_input(
         met_source,
         refet_type,
         mask_mode,
+        ndvi_mode,
     )
 
     refet_type = (refet_type or "eto").lower().strip()
@@ -616,6 +622,7 @@ def _extract_from_container(
     met_source: str,
     refet_type: str,
     mask_mode: str = "irrigation",
+    ndvi_mode: str = "observed",
 ) -> dict[str, Any]:
     """Extract all required data from SwimContainer.
 
@@ -643,6 +650,7 @@ def _extract_from_container(
         met_source,
         refet_type,
         mask_mode,
+        ndvi_mode,
     )
 
     return {
@@ -661,6 +669,7 @@ def _get_container_time_series(
     met_source: str,
     refet_type: str,
     mask_mode: str = "irrigation",
+    ndvi_mode: str = "observed",
 ) -> Any:
     """Get time series data from container as xarray Dataset."""
 
@@ -699,19 +708,29 @@ def _get_container_time_series(
         ndvi_masks = ["irr", "inv_irr"]
 
     ndvi_found = False
-    for mask in ndvi_masks:
-        merged_path = f"derived/merged_ndvi/{mask}"
-        raw_path = f"remote_sensing/ndvi/landsat/{mask}"
-        if merged_path in root:
-            paths[f"ndvi_{mask}"] = merged_path
-            ndvi_found = True
-        elif raw_path in root:
-            paths[f"ndvi_{mask}"] = raw_path
-            ndvi_found = True
+    if ndvi_mode == "climatology":
+        # Climatology mode: tiled merged_ndvi was expanded by project.py
+        # from the 366-day ndvi_climatology. The (n_days, n_fields) array
+        # lives at derived/merged_ndvi/{mask}.
+        for mask in ndvi_masks:
+            merged_path = f"derived/merged_ndvi/{mask}"
+            if merged_path in root:
+                paths[f"ndvi_{mask}"] = merged_path
+                ndvi_found = True
+    else:
+        for mask in ndvi_masks:
+            merged_path = f"derived/merged_ndvi/{mask}"
+            raw_path = f"remote_sensing/ndvi/landsat/{mask}"
+            if merged_path in root:
+                paths[f"ndvi_{mask}"] = merged_path
+                ndvi_found = True
+            elif raw_path in root:
+                paths[f"ndvi_{mask}"] = raw_path
+                ndvi_found = True
 
     if not ndvi_found:
         raise RuntimeError(
-            f"No NDVI data found for mask_mode={mask_mode!r} "
+            f"No NDVI data found for mask_mode={mask_mode!r}, ndvi_mode={ndvi_mode!r} "
             f"(looked for masks {ndvi_masks}). "
             f"Ingest the required NDVI mask into the container."
         )

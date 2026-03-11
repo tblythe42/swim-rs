@@ -131,6 +131,21 @@ class ProjectConfig:
         self.forecast_parameters = None
         self.forecast_parameter_groups = None
 
+        # Hindcast / forecast container projection
+        self.hindcast_start_dt = None
+        self.hindcast_end_dt = None
+        self.hindcast_container = None
+        self.hindcast_met_source = None
+        self.hindcast_ndvi_mode = None
+
+        self.forecast_start_dt = None
+        self.forecast_end_dt = None
+        self.forecast_container = None
+        self.forecast_met_source = None
+        self.forecast_met_dir = None
+        self.forecast_ndvi_mode = None
+        self.forecast_scenarios = None
+
     def read_config(
         self,
         conf_file_path: str,
@@ -339,6 +354,43 @@ class ProjectConfig:
 
         # Forecast
         self.forecast_parameters_csv = forecast_toml_conf.get("forecast_parameters")
+
+        # Hindcast projection (optional)
+        hindcast_conf = self.resolved_config.get("hindcast", {})
+        if hindcast_conf:
+            hc_sdt = hindcast_conf.get("start_date")
+            hc_edt = hindcast_conf.get("end_date")
+            if hc_sdt:
+                self.hindcast_start_dt = pd.to_datetime(hc_sdt)
+            if hc_edt:
+                self.hindcast_end_dt = pd.to_datetime(hc_edt)
+            self.hindcast_container = hindcast_conf.get("container")
+            self.hindcast_met_source = hindcast_conf.get("met_source", self.met_source)
+            self.hindcast_ndvi_mode = hindcast_conf.get("ndvi_mode", "observed")
+
+        # Forecast projection (optional)
+        forecast_proj_conf = self.resolved_config.get("forecast", {})
+        if forecast_proj_conf and forecast_proj_conf.get("start_date"):
+            fc_sdt = forecast_proj_conf.get("start_date")
+            fc_edt = forecast_proj_conf.get("end_date")
+            if fc_sdt:
+                self.forecast_start_dt = pd.to_datetime(fc_sdt)
+            if fc_edt:
+                self.forecast_end_dt = pd.to_datetime(fc_edt)
+            self.forecast_container = forecast_proj_conf.get("container")
+            self.forecast_met_source = forecast_proj_conf.get("met_source", "gridmet")
+            self.forecast_met_dir = forecast_proj_conf.get("met_dir")
+            self.forecast_ndvi_mode = forecast_proj_conf.get("ndvi_mode", "climatology")
+            self.forecast_scenarios = forecast_proj_conf.get("scenarios", [])
+
+            # Manually resolve {data} in forecast paths that also contain
+            # {scenario} (the path resolver skips mixed-template strings
+            # because {scenario} is a runtime placeholder, not a config key).
+            if self.data_dir:
+                for attr in ("forecast_container", "forecast_met_dir"):
+                    val = getattr(self, attr)
+                    if val and "{data}" in val:
+                        setattr(self, attr, val.replace("{data}", self.data_dir))
 
         # Overrides
         self.calibration_dir_override = calibration_dir_override

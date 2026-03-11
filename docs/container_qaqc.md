@@ -59,7 +59,7 @@ rules = HealthPolicy.for_config({
 
 ### Check Types
 
-Each rule specifies one of four check types:
+Each rule specifies one of six check types:
 
 | Check | Meaning |
 |-------|---------|
@@ -67,6 +67,8 @@ Each rule specifies one of four check types:
 | `not_all_fill` | Array exists and at least one value differs from the fill value |
 | `exists` | Array exists in the zarr store (contents not inspected) |
 | `not_all_empty` | String/JSON array has at least one non-empty entry |
+| `field_coverage_union` | Every field has >0 obs in at least one of `{path}/irr` or `{path}/inv_irr` |
+| `field_coverage` | Every field in the array has at least one valid observation |
 
 ---
 
@@ -98,6 +100,8 @@ Recursively walks all 2D arrays under `remote_sensing/`, `meteorology/`, and `sn
 - **FAIL** if the entire array is NaN
 - **WARN** if any fields have zero valid observations
 - **PASS** otherwise, reporting the median observation count
+
+**Paired irr/inv_irr handling:** When a group contains both `irr` and `inv_irr` 2D array children, the time-series scan skips them. Field-level coverage for these paired arrays is handled by policy rules (`field_coverage_union`) which check that each field has observations in at least one of the pair. This avoids misleading WARNs for fields that legitimately only have data in one mask.
 
 Detail includes the full distribution: `obs_per_field_min`, `obs_per_field_p25`, `obs_per_field_median`, `obs_per_field_p75`, `obs_per_field_max`, and `fields_with_zero_obs`.
 
@@ -219,6 +223,8 @@ container.inventory.report(
 ```
 
 Both `SwimContainer.report()` and `Inventory.report()` print the console summary, write artifacts to `output_dir` (if provided), and optionally raise `ContainerHealthError`.
+
+**Config type safety:** `Inventory.report()` requires `config` to be a `dict` or `None`. Passing a non-dict object (e.g. an argparse Namespace or ProjectConfig) raises `TypeError` with a message directing callers to use `SwimContainer.report()` instead, which handles `ProjectConfig` → dict conversion automatically.
 
 ### ContainerHealthError
 

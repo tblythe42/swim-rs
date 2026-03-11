@@ -81,6 +81,7 @@ from swimrs.container.metrics import (
     OperationMetrics,
     track_operation,
 )
+from swimrs.container.project import create_run_container
 from swimrs.container.schema import (
     ETModel,
     Instrument,
@@ -115,6 +116,7 @@ __all__ = [
     # Convenience functions
     "open_container",
     "create_container",
+    "create_run_container",
     # Storage providers
     "StorageProvider",
     "StorageProviderFactory",

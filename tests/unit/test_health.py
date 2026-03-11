@@ -44,9 +44,16 @@ class _FakeArray:
         return self._data[item]
 
 
+class _FakeAttrs(dict):
+    """Dict that also supports attribute-style access for fake zarr attrs."""
+
+    pass
+
+
 class _FakeGroup:
     def __init__(self, mapping: dict):
         self._mapping = mapping
+        self.attrs = _FakeAttrs()
 
     def keys(self):
         # Return immediate child names
@@ -254,7 +261,9 @@ def test_policy_etf_target_model_missing_is_fail():
 
 
 def test_zero_irrigated_fields_is_warn():
-    irr_data = ['{"2020": 0, "2021": 0}'] * 5
+    irr_data = [
+        '{"2020": {"irrigated": 0, "f_irr": 0.0}, "2021": {"irrigated": 0, "f_irr": 0.0}}'
+    ] * 5
     root = _FakeRoot(
         {
             "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
@@ -267,6 +276,28 @@ def test_zero_irrigated_fields_is_warn():
     irr_checks = [c for c in report.checks if "irr_data" in c.path]
     assert len(irr_checks) == 1
     assert irr_checks[0].severity == "WARN"
+
+
+def test_irrigated_fields_detected_nested_format():
+    """irr_data with nested dicts correctly counts irrigated fields."""
+    irr_data = [
+        '{"2020": {"irrigated": 1, "f_irr": 0.5}, "2021": {"irrigated": 0, "f_irr": 0.0}}',
+        '{"2020": {"irrigated": 0, "f_irr": 0.0}, "2021": {"irrigated": 1, "f_irr": 0.3}}',
+        '{"2020": {"irrigated": 0, "f_irr": 0.0}, "2021": {"irrigated": 0, "f_irr": 0.0}}',
+    ]
+    root = _FakeRoot(
+        {
+            "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
+            "derived/dynamics/irr_data": _FakeArray(irr_data),
+        }
+    )
+    checker = ContainerHealthCheck(root, [str(i) for i in range(3)])
+    report = checker.run()
+
+    irr_checks = [c for c in report.checks if "irr_data" in c.path]
+    assert len(irr_checks) == 1
+    assert irr_checks[0].severity == "PASS"
+    assert irr_checks[0].detail["n_irrigated"] == 2
 
 
 def test_report_passed_property():
@@ -333,3 +364,191 @@ def test_html_report_renders():
         content = result.read_text()
         assert "Container Health Report" in content
         assert "PASS" in content
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: Exception type matches public API
+# ---------------------------------------------------------------------------
+
+
+def test_exception_type_matches_public_api():
+    """Inventory.report() raises the same ContainerHealthError exported from __init__."""
+    from swimrs.container import ContainerHealthError as PublicCHE
+    from swimrs.container.health import ContainerHealthError as HealthCHE
+
+    # They must be the exact same class
+    assert PublicCHE is HealthCHE
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: Inventory.report() rejects non-dict config
+# ---------------------------------------------------------------------------
+
+
+def test_inventory_report_rejects_non_dict_config():
+    """Passing a non-dict, non-None config to Inventory.report() raises TypeError."""
+    from swimrs.container.inventory import Inventory
+
+    root = _make_healthy_root(5)
+    inv = Inventory(root, [str(i) for i in range(5)])
+
+    # argparse.Namespace simulating a bad caller
+    class FakeConfig:
+        mask_mode = "irrigation"
+
+    with pytest.raises(TypeError, match="config must be a dict or None"):
+        inv.report(config=FakeConfig())
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: field_coverage_union and field_coverage policy checks
+# ---------------------------------------------------------------------------
+
+
+def _make_irr_inv_irr_root(n_fields=5, irr_valid=None, inv_irr_valid=None):
+    """Create a root with irr and inv_irr NDVI arrays.
+
+    irr_valid/inv_irr_valid are boolean arrays indicating which fields have data.
+    """
+    n_time = 3
+    time_arr = np.array(["2020-01-01", "2020-01-02", "2020-01-03"], dtype="datetime64[D]")
+
+    irr_data = np.full((n_time, n_fields), np.nan)
+    inv_irr_data = np.full((n_time, n_fields), np.nan)
+
+    if irr_valid is not None:
+        for i, v in enumerate(irr_valid):
+            if v:
+                irr_data[:, i] = 0.5
+
+    if inv_irr_valid is not None:
+        for i, v in enumerate(inv_irr_valid):
+            if v:
+                inv_irr_data[:, i] = 0.3
+
+    return _FakeRoot(
+        {
+            "time/daily": _FakeArray(time_arr),
+            "properties/soils/awc": _FakeArray(np.full(n_fields, 0.15)),
+            "properties/land_cover/modis_lc": _FakeArray(np.full(n_fields, 12, dtype="int16")),
+            "remote_sensing/ndvi/landsat/irr": _FakeArray(irr_data),
+            "remote_sensing/ndvi/landsat/inv_irr": _FakeArray(inv_irr_data),
+        }
+    )
+
+
+def test_field_coverage_union_pass():
+    """All fields covered by irr union inv_irr -> PASS."""
+    # Fields 0,1,2 have irr data; fields 3,4 have inv_irr data
+    root = _make_irr_inv_irr_root(
+        n_fields=5,
+        irr_valid=[True, True, True, False, False],
+        inv_irr_valid=[False, False, False, True, True],
+    )
+    config = {"mask_mode": "irrigation"}
+    checker = ContainerHealthCheck(root, [str(i) for i in range(5)], config=config)
+    report = checker.run()
+
+    ndvi_coverage = [
+        c
+        for c in report.checks
+        if c.section == "policy"
+        and c.path == "remote_sensing/ndvi/landsat"
+        and c.detail.get("check") == "field_coverage_union"
+    ]
+    assert len(ndvi_coverage) == 1
+    assert ndvi_coverage[0].severity == "PASS"
+
+
+def test_field_coverage_union_fail():
+    """Field with zero obs in both irr and inv_irr -> FAIL."""
+    # Field 4 has no data in either
+    root = _make_irr_inv_irr_root(
+        n_fields=5,
+        irr_valid=[True, True, True, False, False],
+        inv_irr_valid=[False, False, False, True, False],
+    )
+    config = {"mask_mode": "irrigation"}
+    checker = ContainerHealthCheck(root, [str(i) for i in range(5)], config=config)
+    report = checker.run()
+
+    ndvi_coverage = [
+        c
+        for c in report.checks
+        if c.section == "policy"
+        and c.path == "remote_sensing/ndvi/landsat"
+        and c.detail.get("check") == "field_coverage_union"
+    ]
+    assert len(ndvi_coverage) == 1
+    assert ndvi_coverage[0].severity == "FAIL"
+    assert "1/5" in ndvi_coverage[0].message
+
+
+def test_field_coverage_no_mask_fail():
+    """no_mask mode, field with zero obs -> FAIL."""
+    n_fields = 5
+    n_time = 3
+    time_arr = np.array(["2020-01-01", "2020-01-02", "2020-01-03"], dtype="datetime64[D]")
+    no_mask_data = np.full((n_time, n_fields), np.nan)
+    # Fields 0-3 have data, field 4 does not
+    for i in range(4):
+        no_mask_data[:, i] = 0.5
+
+    root = _FakeRoot(
+        {
+            "time/daily": _FakeArray(time_arr),
+            "properties/soils/awc": _FakeArray(np.full(n_fields, 0.15)),
+            "properties/land_cover/modis_lc": _FakeArray(np.full(n_fields, 12, dtype="int16")),
+            "remote_sensing/ndvi/landsat/no_mask": _FakeArray(no_mask_data),
+        }
+    )
+
+    config = {"mask_mode": "no_mask"}
+    checker = ContainerHealthCheck(root, [str(i) for i in range(n_fields)], config=config)
+    report = checker.run()
+
+    ndvi_coverage = [
+        c
+        for c in report.checks
+        if c.section == "policy"
+        and c.path == "remote_sensing/ndvi/landsat/no_mask"
+        and c.detail.get("check") == "field_coverage"
+    ]
+    assert len(ndvi_coverage) == 1
+    assert ndvi_coverage[0].severity == "FAIL"
+    assert "1/5" in ndvi_coverage[0].message
+
+
+def test_report_stores_health_check_in_attrs():
+    """Inventory.report() stores last_health_check in root attrs."""
+    from swimrs.container.inventory import Inventory
+
+    root = _make_healthy_root(5)
+    inv = Inventory(root, [str(i) for i in range(5)])
+    report = inv.report()
+
+    stored = root.attrs.get("last_health_check")
+    assert stored is not None
+    assert stored["passed"] is True
+    assert stored["fingerprint"] == report.container_fingerprint
+    assert "timestamp" in stored
+
+
+def test_irr_inv_irr_no_ts_warn_spam():
+    """irr/inv_irr paired arrays should not produce time-series WARNs."""
+    root = _make_irr_inv_irr_root(
+        n_fields=5,
+        irr_valid=[True, True, True, False, False],
+        inv_irr_valid=[False, False, False, True, True],
+    )
+    config = {"mask_mode": "irrigation"}
+    checker = ContainerHealthCheck(root, [str(i) for i in range(5)], config=config)
+    report = checker.run()
+
+    # No time_series checks should exist for the irr/inv_irr paths
+    ts_irr_checks = [
+        c
+        for c in report.checks
+        if c.section == "time_series" and ("irr" in c.path or "inv_irr" in c.path)
+    ]
+    assert len(ts_irr_checks) == 0

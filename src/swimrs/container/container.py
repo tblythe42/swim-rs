@@ -19,6 +19,7 @@ Storage backends are pluggable via the storage module:
 
 from __future__ import annotations
 
+import json
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
@@ -729,6 +730,32 @@ class SwimContainer:
             output_dir=output_dir,
         )
 
+    def calibration_report(self, output_dir=None):
+        """Generate calibration report for this container.
+
+        Args:
+            output_dir: If set, write calibration.json, calibration.html,
+                calibration.png here.
+
+        Returns:
+            CalibrationReport
+        """
+        from swimrs.container.calibration_report import build_calibration_report
+
+        report = build_calibration_report(self._root, self.field_uids, container_path=self.path)
+
+        if output_dir is not None:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            json_path = output_dir / "calibration.json"
+            json_path.write_text(json.dumps(report.to_json(), indent=2))
+
+            report.render_html(output_dir / "calibration.html")
+            report.render_png(output_dir / "calibration.png")
+
+        return report
+
     def get_field_index(self, uid: str) -> int:
         """Get the array index for a field UID."""
         if uid not in self._uid_to_index:
@@ -792,6 +819,88 @@ class SwimContainer:
             fill_value=fill_value,
         )
         return arr
+
+    def copy_static_groups(self, source: SwimContainer) -> None:
+        """Copy static (non-time-varying) data from a source container.
+
+        Copies properties, calibration data, and selected dynamics
+        (gwsub_data, ke_max, kc_max) from the source (typically the
+        calibration container). Does NOT copy merged_ndvi or irr_data
+        since those must be recomputed for the target time range.
+
+        Args:
+            source: Source SwimContainer to copy from (usually the
+                calibration container with fitted parameters).
+
+        Raises:
+            ValueError: If container is read-only or UIDs don't match.
+        """
+        if self._mode == "r":
+            raise ValueError("Cannot copy: container opened in read-only mode")
+
+        src_root = source._root
+
+        # Verify UID consistency before positional array copy
+        src_uids = list(src_root["geometry/uid"][:])
+        if src_uids and isinstance(src_uids[0], bytes):
+            src_uids = [u.decode("utf-8") for u in src_uids]
+        if src_uids != self._field_uids:
+            raise ValueError(
+                f"UID mismatch: source has {len(src_uids)} fields, "
+                f"target has {len(self._field_uids)}. "
+                "Containers must share the same fields shapefile."
+            )
+
+        copied = []
+
+        # Copy full groups (properties, calibration)
+        for group_name in ("properties", "calibration"):
+            if group_name in src_root:
+                self._copy_zarr_group(src_root[group_name], self._root, group_name)
+                copied.append(group_name)
+
+        # Selectively copy dynamics: ke_max, kc_max, gwsub_data carry
+        # forward from calibration. irr_data must be recomputed for the
+        # target time range.  merged_ndvi is time-varying and also
+        # recomputed.
+        dynamics_to_copy = ["ke_max", "kc_max", "gwsub_data"]
+        if "derived/dynamics" in src_root:
+            self._ensure_group("derived/dynamics")
+            dst_dyn = self._root["derived/dynamics"]
+            for arr_name in dynamics_to_copy:
+                src_path = f"derived/dynamics/{arr_name}"
+                if src_path in src_root:
+                    if arr_name in dst_dyn:
+                        del dst_dyn[arr_name]
+                    dst_dyn.create_array(arr_name, data=src_root[src_path][:])
+            copied.append(f"dynamics({', '.join(dynamics_to_copy)})")
+
+        # Record provenance
+        self._provenance.record(
+            "copy_static",
+            source=source.uri,
+            params={"groups_copied": copied},
+        )
+        self._modified = True
+
+    @staticmethod
+    def _copy_zarr_group(src_group: zarr.Group, dst_parent: zarr.Group, name: str) -> None:
+        """Recursively copy a zarr group including attrs (zarr v3 has no zarr.copy)."""
+        if name in dst_parent:
+            del dst_parent[name]
+        dst_group = dst_parent.create_group(name)
+        # Preserve group-level attrs (e.g. calibration batch metadata)
+        src_attrs = dict(src_group.attrs)
+        if src_attrs:
+            dst_group.attrs.update(src_attrs)
+        for child_name, child in src_group.members():
+            if isinstance(child, zarr.Array):
+                arr = dst_group.create_array(child_name, data=child[:])
+                arr_attrs = dict(child.attrs)
+                if arr_attrs:
+                    arr.attrs.update(arr_attrs)
+            elif isinstance(child, zarr.Group):
+                SwimContainer._copy_zarr_group(child, dst_group, child_name)
 
     def _mark_modified(self):
         """Mark the container as having unsaved changes."""

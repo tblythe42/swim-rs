@@ -189,6 +189,9 @@ class HealthPolicy:
                     )
                 )
                 # Field-level coverage for ensemble members
+                # SIMS only runs on crop-type fields (CDL), so missing
+                # fields are expected — downgrade to WARN.
+                severity = "WARN" if member == "sims" else "FAIL"
                 if mask_mode == "irrigation":
                     rules.append(
                         PolicyRule(
@@ -197,7 +200,7 @@ class HealthPolicy:
                             f"remote_sensing/etf/landsat/{member}",
                             "field_coverage_union",
                             0,
-                            "FAIL",
+                            severity,
                             f"Every field must have ETf ({member}) obs in irr or inv_irr",
                         )
                     )
@@ -210,7 +213,7 @@ class HealthPolicy:
                             no_mask_path,
                             "field_coverage",
                             0,
-                            "FAIL",
+                            severity,
                             f"mask_mode=no_mask requires ETf ({member}) for all fields",
                         )
                     )
@@ -657,7 +660,9 @@ class ContainerHealthCheck:
                 try:
                     s = val if isinstance(val, str) else val.decode("utf-8")
                     parsed = json.loads(s)
-                    if any(v > 0 for v in parsed.values()):
+                    if any(
+                        yr.get("irrigated", 0) > 0 for yr in parsed.values() if isinstance(yr, dict)
+                    ):
                         n_irrigated += 1
                 except (json.JSONDecodeError, AttributeError, TypeError):
                     pass

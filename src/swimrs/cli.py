@@ -652,6 +652,28 @@ def cmd_prep(args: argparse.Namespace) -> int:
             print(f"Dynamics compute failed: {e}")
             failures.append("dynamics")
 
+        # Post-build health check
+        if not args.skip_health and not failures:
+            print("\n--- Health Check ---")
+            try:
+                health_config = {}
+                use_lulc_mode = bool(args.use_lulc_irr or args.international)
+                health_config["mask_mode"] = "no_mask" if use_lulc_mode else "irrigation"
+                if config.etf_target_model:
+                    health_config["etf_target_model"] = config.etf_target_model
+                if config.etf_ensemble_members:
+                    health_config["etf_ensemble_members"] = config.etf_ensemble_members
+                met_source = getattr(config, "met_source", "gridmet")
+                if met_source:
+                    health_config["met_source"] = met_source
+                snow_source = getattr(config, "snow_source", None)
+                if snow_source:
+                    health_config["snow_source"] = snow_source
+
+                container.report(config=health_config)
+            except Exception as e:
+                print(f"Health check failed: {e}")
+
     finally:
         try:
             container.close()
@@ -679,6 +701,57 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         print(container.query.status(detailed=args.detailed))
     finally:
         container.close()
+
+    return 0
+
+
+def cmd_project(args: argparse.Namespace) -> int:
+    """Build a hindcast or forecast run container from a calibrated source."""
+    from swimrs.container.project import create_run_container
+
+    conf_path = args.config
+    out_root = _resolve_project_root(conf_path, args.out_dir)
+
+    config = ProjectConfig()
+    config.read_config(conf_path, project_root_override=out_root)
+
+    mode = args.mode
+    scenarios = [args.scenario] if args.scenario else None
+
+    if mode == "forecast" and not scenarios:
+        # Use all scenarios from config
+        scenarios = getattr(config, "forecast_scenarios", None)
+        if not scenarios:
+            print("No --scenario provided and no forecast.scenarios in TOML")
+            return 1
+
+    try:
+        if mode == "hindcast":
+            create_run_container(
+                config,
+                mode="hindcast",
+                overwrite=args.overwrite,
+                skip_health=args.skip_health,
+            )
+        elif mode == "forecast":
+            for scenario in scenarios:
+                print(f"\n=== Scenario: {scenario} ===")
+                create_run_container(
+                    config,
+                    mode="forecast",
+                    scenario=scenario,
+                    overwrite=args.overwrite,
+                    skip_health=args.skip_health,
+                )
+        else:
+            print(f"Unknown mode: {mode}")
+            return 1
+    except Exception as e:
+        print(f"Project build failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 1
 
     return 0
 
@@ -993,6 +1066,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Alias for LULC-based irrigation detection with no-mask NDVI/ETf (non-CONUS workflows)",
     )
+    pp.add_argument(
+        "--skip-health",
+        action="store_true",
+        help="Skip post-build health check (runs by default)",
+    )
     pp.set_defaults(func=cmd_prep)
 
     # calibrate
@@ -1028,6 +1106,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--detailed", action="store_true", help="Show detailed status with provenance log"
     )
     pi.set_defaults(func=cmd_inspect)
+
+    # project (run container factory)
+    pj = sub.add_parser(
+        "project",
+        help="Build hindcast or forecast run container from calibrated source",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Creates a new container with a different date range, copying calibrated "
+        "parameters from the source container and ingesting time-varying data for "
+        "the target period.",
+    )
+    add_common(pj)
+    pj.add_argument(
+        "--mode",
+        required=True,
+        choices=["hindcast", "forecast"],
+        help="Container type to build",
+    )
+    pj.add_argument(
+        "--scenario",
+        default=None,
+        help="Forecast scenario (e.g. rcp85_cesm). If omitted for forecast mode, "
+        "builds all scenarios listed in the TOML.",
+    )
+    pj.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing run container",
+    )
+    pj.add_argument(
+        "--skip-health",
+        action="store_true",
+        help="Skip post-build health check",
+    )
+    pj.set_defaults(func=cmd_project)
 
     # evaluate
     pv = sub.add_parser(
