@@ -47,7 +47,7 @@ runoff_process = "cn"
 
 [date_range]
 start_date = "1987-01-01"
-end_date = "2025-12-31"
+end_date = "2025-11-30"
 
 [crop_coefficient]
 kc_proxy = "etf"
@@ -61,7 +61,6 @@ calibration_dir = "{pest_run_dir}/pest/mult"
 obs_folder = "{pest_run_dir}/obs"
 initial_values_csv = "{pest_run_dir}/params.csv"
 spinup = "{pest_run_dir}/spinup.json"
-python_script = "{project_workspace}/custom_forward_run.py"
 
 # --- Experiment A: Landsat PT-JPL only (default) ---
 etf_target_model = "ptjpl"

@@ -1106,6 +1106,21 @@ if __name__ == "__main__":
                     spn_dct[fid]["s3"] = float(final_state.s3[i])
                     spn_dct[fid]["s4"] = float(final_state.s4[i])
 
+            # Guard: reject spinup if any field has NaN state
+            nan_fields = [
+                fid
+                for fid, vals in spn_dct.items()
+                if any(np.isnan(v) for v in vals.values() if isinstance(v, float))
+            ]
+            if nan_fields:
+                raise ValueError(
+                    f"Spinup produced NaN state for {len(nan_fields)} field(s): "
+                    f"{nan_fields[:5]}... "
+                    "This usually means forcing data has gaps at the end of the "
+                    "simulation period. Check that met data covers the full "
+                    f"date range ({self.config.start_dt} to {self.config.end_dt})."
+                )
+
             with open(self.config.spinup, "w") as f:
                 json.dump(spn_dct, f, indent=2)
 
