@@ -137,6 +137,10 @@ class ProjectConfig:
         self.hindcast_container = None
         self.hindcast_met_source = None
         self.hindcast_ndvi_mode = None
+        self.hindcast_initialization_strategy = None
+        self.hindcast_initialization_window_years = None
+        self.hindcast_initialization_cycles = None
+        self.hindcast_initialization_tolerance = None
 
         self.forecast_start_dt = None
         self.forecast_end_dt = None
@@ -367,6 +371,22 @@ class ProjectConfig:
             self.hindcast_container = hindcast_conf.get("container")
             self.hindcast_met_source = hindcast_conf.get("met_source", self.met_source)
             self.hindcast_ndvi_mode = hindcast_conf.get("ndvi_mode", "observed")
+            self.hindcast_initialization_strategy = hindcast_conf.get(
+                "initialization_strategy",
+                "cyclic_spinup",
+            )
+            self.hindcast_initialization_window_years = hindcast_conf.get(
+                "initialization_window_years",
+                5,
+            )
+            self.hindcast_initialization_cycles = hindcast_conf.get(
+                "initialization_cycles",
+                6,
+            )
+            self.hindcast_initialization_tolerance = hindcast_conf.get(
+                "initialization_tolerance",
+                1e-3,
+            )
 
         # Forecast projection (optional)
         forecast_proj_conf = self.resolved_config.get("forecast", {})

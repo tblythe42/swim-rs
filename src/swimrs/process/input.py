@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
 __all__ = ["SwimInput", "build_swim_input"]
 
+MIN_IRRIGATED_YEAR_NDVI_OBS = 3
+
 
 @dataclass
 class SwimInput:
@@ -641,7 +643,7 @@ def _extract_from_container(
     dynamics = exporter._get_dynamics_dict(fids)
 
     # Build time series dataset
-    time_series = _get_container_time_series(
+    time_series, ndvi_obs_counts = _get_container_time_series(
         container,
         fids,
         start_date,
@@ -657,6 +659,7 @@ def _extract_from_container(
         "props": props,
         "dynamics": dynamics,
         "time_series": time_series,
+        "ndvi_obs_counts": ndvi_obs_counts,
     }
 
 
@@ -736,7 +739,7 @@ def _get_container_time_series(
         )
 
     if not paths:
-        return None
+        return None, {}
 
     # Load dataset with date filtering
     start_str = start_date.strftime("%Y-%m-%d")
@@ -749,6 +752,8 @@ def _get_container_time_series(
         end_date=end_str,
     )
 
+    ndvi_obs_counts = _compute_yearly_ndvi_obs_counts(ds)
+
     # Interpolate NDVI to fill gaps (matches legacy prep)
     for var in ds.data_vars:
         if "ndvi" in var:
@@ -758,7 +763,72 @@ def _get_container_time_series(
             df_interp = df_interp.bfill(axis=0).ffill(axis=0)
             ds[var] = ds[var].copy(data=df_interp.values)
 
-    return ds
+    return ds, ndvi_obs_counts
+
+
+def _compute_yearly_ndvi_obs_counts(ds: Any) -> dict[str, dict[int, np.ndarray]]:
+    """Count raw finite NDVI observations by field-year before gap filling."""
+    if ds is None:
+        return {}
+
+    time_index = pd.DatetimeIndex(ds.coords["time"].values)
+    year_array = time_index.year
+    counts: dict[str, dict[int, np.ndarray]] = {}
+
+    for var in ds.data_vars:
+        if "ndvi" not in var:
+            continue
+        mask_name = var.removeprefix("ndvi_")
+        values = ds[var].values
+        yearly_counts: dict[int, np.ndarray] = {}
+        for year in np.unique(year_array):
+            year_mask = year_array == year
+            yearly_counts[int(year)] = np.sum(np.isfinite(values[year_mask, :]), axis=0).astype(
+                np.int32
+            )
+        counts[mask_name] = yearly_counts
+
+    return counts
+
+
+def _ndvi_year_meets_threshold(
+    ndvi_obs_counts: dict[str, dict[int, np.ndarray]],
+    *,
+    mask_name: str,
+    year: int,
+    field_idx: int,
+    min_obs: int = MIN_IRRIGATED_YEAR_NDVI_OBS,
+) -> bool:
+    """Return True when a field-year has enough raw NDVI observations to use."""
+    yearly = ndvi_obs_counts.get(mask_name, {})
+    counts = yearly.get(int(year))
+    if counts is None:
+        return False
+    return int(counts[field_idx]) >= int(min_obs)
+
+
+def _assert_finite_ndvi(
+    ndvi_arr: np.ndarray,
+    *,
+    time_index: pd.DatetimeIndex,
+    fids: list[str],
+) -> None:
+    """Raise with field/year diagnostics if the consolidated NDVI remains non-finite."""
+    bad_fields = np.where(np.any(~np.isfinite(ndvi_arr), axis=0))[0]
+    if bad_fields.size == 0:
+        return
+
+    details = []
+    for field_idx in bad_fields[:5]:
+        bad_years = sorted(set(time_index.year[~np.isfinite(ndvi_arr[:, field_idx])]))
+        years_text = ",".join(str(year) for year in bad_years[:5])
+        if len(bad_years) > 5:
+            years_text += ",..."
+        details.append(f"{fids[field_idx]}[{years_text}]")
+
+    raise ValueError(
+        "Consolidated NDVI contains non-finite values after mask selection: " + "; ".join(details)
+    )
 
 
 def _write_properties_from_container(
@@ -959,6 +1029,7 @@ def _write_time_series_from_container(
     """Write time series data from container to HDF5."""
     ts_group = h5.create_group("time_series")
     ds = container_data["time_series"]
+    ndvi_obs_counts = container_data.get("ndvi_obs_counts", {})
 
     if ds is None:
         # Create empty arrays if no data
@@ -1020,13 +1091,15 @@ def _write_time_series_from_container(
     if "ndvi_no_mask" in ds:
         # no_mask mode — use unmasked NDVI directly
         ndvi_arr = ds["ndvi_no_mask"].values.copy()
+        time_index = pd.DatetimeIndex(ds.coords["time"].values)
     elif "ndvi_inv_irr" in ds:
         # irrigation mode — base on inv_irr, switch to irr for irrigated years
         ndvi_arr = ds["ndvi_inv_irr"].values.copy()
+        time_index = pd.DatetimeIndex(ds.coords["time"].values)
 
         if "ndvi_irr" in ds:
             ndvi_irr = ds["ndvi_irr"].values
-            time_index = pd.DatetimeIndex(ds.coords["time"].values)
+            year_array = time_index.year
 
             for fid_idx, fid in enumerate(fids):
                 if fid not in irr_data:
@@ -1043,17 +1116,25 @@ def _write_time_series_from_container(
                         continue
 
                 if irr_years:
-                    year_array = time_index.year
                     for yr in irr_years:
+                        if not _ndvi_year_meets_threshold(
+                            ndvi_obs_counts,
+                            mask_name="irr",
+                            year=yr,
+                            field_idx=fid_idx,
+                        ):
+                            continue
                         yr_mask = year_array == yr
                         ndvi_arr[yr_mask, fid_idx] = ndvi_irr[yr_mask, fid_idx]
     elif "ndvi_irr" in ds:
         ndvi_arr = ds["ndvi_irr"].values.copy()
+        time_index = pd.DatetimeIndex(ds.coords["time"].values)
     else:
         raise RuntimeError(
             "No NDVI data found in time series dataset. Check mask_mode and container contents."
         )
 
+    _assert_finite_ndvi(ndvi_arr, time_index=time_index, fids=fids)
     ts_group.create_dataset("ndvi", data=ndvi_arr, compression="gzip")
 
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import pandas as pd
 import pytest
 import zarr
 from zarr.core.dtype import VariableLengthUTF8
@@ -21,6 +22,49 @@ from zarr.core.dtype import VariableLengthUTF8
 FIXTURE_SHP = (
     Path(__file__).parent.parent / "fixtures" / "S2" / "data" / "gis" / "flux_footprint_s2.shp"
 )
+
+
+def _create_runnable_container(tmp_path, *, start_date, end_date):
+    """Build a minimal runnable container with the required forcings."""
+    from swimrs.container.container import SwimContainer
+
+    container = SwimContainer.create(
+        str(tmp_path / "run_ready.swim"),
+        fields_shapefile=str(FIXTURE_SHP),
+        uid_column="site_id",
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    awc = container._create_property_array("properties/soils/awc")
+    awc[:] = np.array([150.0], dtype=np.float32)
+
+    ksat = container._create_property_array("properties/soils/ksat")
+    ksat[:] = np.array([10.0], dtype=np.float32)
+
+    modis = container._create_property_array(
+        "properties/land_cover/modis_lc",
+        dtype="int16",
+        fill_value=-1,
+    )
+    modis[:] = np.array([12], dtype=np.int16)
+
+    ndvi = container._create_timeseries_array("remote_sensing/ndvi/landsat/no_mask")
+    n_days = container.n_days
+    ndvi[:] = np.linspace(0.3, 0.6, n_days, dtype=np.float32).reshape(-1, 1)
+
+    for path, values in {
+        "meteorology/gridmet/prcp": np.zeros(n_days, dtype=np.float32),
+        "meteorology/gridmet/tmin": np.linspace(5.0, 9.0, n_days, dtype=np.float32),
+        "meteorology/gridmet/tmax": np.linspace(15.0, 19.0, n_days, dtype=np.float32),
+        "meteorology/gridmet/srad": np.linspace(18.0, 20.0, n_days, dtype=np.float32),
+        "meteorology/gridmet/eto": np.linspace(3.0, 3.8, n_days, dtype=np.float32),
+    }.items():
+        arr = container._create_timeseries_array(path)
+        arr[:] = np.asarray(values, dtype=np.float32).reshape(-1, 1)
+
+    container.save()
+    return container
 
 
 # ---------------------------------------------------------------------------
@@ -437,3 +481,83 @@ class TestHealthCheckNoSnow:
         assert has_fail, "Expected FAIL for missing snow/snodas/swe"
 
         tgt.close()
+
+
+class TestDefaultRestartSetup:
+    """Tests for forecast restart copying and hindcast initialization."""
+
+    def test_copy_forecast_restart(self, tmp_path):
+        from swimrs.container.project import _copy_forecast_restart
+
+        src = _create_runnable_container(
+            tmp_path / "src",
+            start_date="2020-04-01",
+            end_date="2020-04-05",
+        )
+        src.run(
+            run_id="calibration_resolved_state",
+            profile="state_only",
+            mask_mode="none",
+            use_default_restart=False,
+        )
+        src.runs.set_default_restart("calibration_resolved_state")
+        src.save()
+
+        tgt = _create_runnable_container(
+            tmp_path / "tgt",
+            start_date="2020-04-06",
+            end_date="2020-04-10",
+        )
+
+        copied_run_id = _copy_forecast_restart(
+            target=tgt,
+            source=src,
+            forecast_start=pd.Timestamp("2020-04-06"),
+        )
+
+        assert copied_run_id == "calibration_resolved_state"
+        assert tgt.runs.default_restart_run_id() == "calibration_resolved_state"
+        assert "calibration_resolved_state" in tgt.runs.list()
+
+        meta = tgt.runs.metadata("calibration_resolved_state")
+        assert meta["copied_from_container"] == src.uri
+        assert meta["copied_from_run_id"] == "calibration_resolved_state"
+
+        src.close()
+        tgt.close()
+
+    def test_build_hindcast_initializer(self, tmp_path):
+        from swimrs.container.project import _build_hindcast_initializer
+
+        target = _create_runnable_container(
+            tmp_path / "hindcast",
+            start_date="2020-04-01",
+            end_date="2020-04-05",
+        )
+
+        config = MagicMock()
+        config.hindcast_initialization_strategy = "cyclic_spinup"
+        config.hindcast_initialization_window_years = 1
+        config.hindcast_initialization_cycles = 2
+        config.hindcast_initialization_tolerance = 1e9
+        config.refet_type = "eto"
+        config.etf_target_model = "ssebop"
+        config.mask_mode = "none"
+
+        run_id = _build_hindcast_initializer(
+            target=target,
+            config=config,
+            met_source="gridmet",
+            ndvi_mode="observed",
+        )
+
+        assert run_id == "hindcast_initial_state"
+        assert target.runs.default_restart_run_id() == "hindcast_initial_state"
+
+        meta = target.runs.metadata("hindcast_initial_state")
+        assert meta["run_role"] == "initialization"
+        assert meta["initialization_strategy"] == "cyclic_spinup"
+        assert meta["n_cycles"] == 2
+        assert meta["converged"] is True
+
+        target.close()
