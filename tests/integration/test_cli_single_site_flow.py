@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
 
 import geopandas as gpd
@@ -231,3 +232,69 @@ def test_cli_prep_fails_loudly_on_stage_error(tmp_path, monkeypatch):
 
     rc = _parse_and_run(["prep", cfg, "--out-dir", str(tmp_path), "--sites", FID])
     assert rc == 1
+
+
+def test_cli_run_persists_to_container(tmp_path, monkeypatch):
+    cfg = _fixture_config()
+    container_path = tmp_path / "existing.swim"
+    container_path.write_text("placeholder")
+
+    calls = {"run": [], "save": 0, "close": 0}
+
+    class _FakeRuns:
+        @staticmethod
+        def metadata(run_id):
+            return {"run_id": run_id, "profile": "state_only", "n_days": 3, "field_count": 1}
+
+    class _FakeContainer:
+        runs = _FakeRuns()
+
+        def run(self, **kwargs):
+            calls["run"].append(kwargs)
+            return types.SimpleNamespace(run_id=kwargs.get("run_id") or "auto_run")
+
+        def save(self):
+            calls["save"] += 1
+
+        def close(self):
+            calls["close"] += 1
+
+    fake_container = _FakeContainer()
+    monkeypatch.setattr(cli.SwimContainer, "open", staticmethod(lambda *a, **k: fake_container))
+
+    rc = _parse_and_run(
+        [
+            "run",
+            cfg,
+            "--out-dir",
+            str(tmp_path),
+            "--container",
+            str(container_path),
+            "--run-id",
+            "demo_run",
+            "--profile",
+            "state_only",
+            "--restart-from",
+            "previous_run",
+            "--start-date",
+            "2020-01-01",
+            "--end-date",
+            "2020-01-03",
+            "--sites",
+            FID,
+        ]
+    )
+
+    assert rc == 0
+    assert calls["save"] == 1
+    assert calls["close"] == 1
+    assert len(calls["run"]) == 1
+
+    kwargs = calls["run"][0]
+    assert kwargs["run_id"] == "demo_run"
+    assert kwargs["profile"] == "state_only"
+    assert kwargs["restart_from"] == "previous_run"
+    assert kwargs["start_date"] == "2020-01-01"
+    assert kwargs["end_date"] == "2020-01-03"
+    assert kwargs["fields"] == [FID]
+    assert kwargs["ndvi_mode"] == "observed"

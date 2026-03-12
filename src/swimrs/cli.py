@@ -23,6 +23,11 @@ def _try_import(installed_path: str, dev_path: str, name: str):
 
 
 ProjectConfig = _try_import("swimrs.swim.config", "src.swimrs.swim.config", "ProjectConfig")
+health_report_output_dir = _try_import(
+    "swimrs.container.health",
+    "src.swimrs.container.health",
+    "health_report_output_dir",
+)
 
 # Earth Engine utils and exports
 is_authorized = _try_import(
@@ -84,13 +89,6 @@ PestBuilder = _try_import(
 )
 run_pst = _try_import("swimrs.calibrate.run_pest", "src.swimrs.calibrate.run_pest", "run_pst")
 
-# Evaluate (process package)
-build_swim_input = _try_import(
-    "swimrs.process.input", "src.swimrs.process.input", "build_swim_input"
-)
-run_daily_loop = _try_import(
-    "swimrs.process.loop_fast", "src.swimrs.process.loop_fast", "run_daily_loop_fast"
-)
 SwimContainer = _try_import("swimrs.container", "src.swimrs.container", "SwimContainer")
 
 
@@ -106,6 +104,84 @@ def _resolve_project_root(default_config_path: str, override: str | None) -> str
         return os.path.abspath(override)
     # default: directory containing the TOML
     return os.path.dirname(os.path.abspath(default_config_path))
+
+
+def _resolve_container_path(
+    config,
+    conf_path: str,
+    out_root: str | None,
+    override: str | None = None,
+) -> str:
+    if override:
+        return os.path.abspath(override)
+
+    container_path = getattr(config, "container_path", None)
+    if container_path:
+        return container_path
+
+    data_root = config.data_dir or out_root or os.path.dirname(os.path.abspath(conf_path))
+    return os.path.join(data_root, f"{config.project_name or 'swim'}.swim")
+
+
+def _resolve_calibrated_params_path(
+    config, forecast_params: str | None, out_root: str
+) -> str | None:
+    calibrated_params_path = None
+    if not forecast_params:
+        return None
+
+    os.makedirs(out_root, exist_ok=True)
+    config.forecast_param_csv = forecast_params
+    if os.path.isfile(config.forecast_param_csv):
+        config.read_forecast_parameters()
+        if hasattr(config, "forecast_parameters") and config.forecast_parameters is not None:
+            calibrated_params_path = _convert_forecast_params_to_json(
+                config.forecast_parameters, out_root
+            )
+    else:
+        print(f"Forecast parameter CSV not found: {config.forecast_param_csv}")
+
+    return calibrated_params_path
+
+
+def _write_evaluation_csvs(result, out_root: str) -> list[str]:
+    import pandas as pd
+
+    os.makedirs(out_root, exist_ok=True)
+
+    write_failures: list[str] = []
+    for i, fid in enumerate(result.field_uids):
+        df_data = {
+            "et_act": result.output.eta[:, i],
+            "etref": result.ref_et[:, i],
+            "kc_act": result.output.etf[:, i],
+            "kc_bas": result.output.kcb[:, i],
+            "ks": result.output.ks[:, i],
+            "ke": result.output.ke[:, i],
+            "melt": result.output.melt[:, i],
+            "rain": result.output.rain[:, i],
+            "depl_root": result.output.depl_root[:, i],
+            "dperc": result.output.dperc[:, i],
+            "runoff": result.output.runoff[:, i],
+            "swe": result.output.swe[:, i],
+            "ppt": result.prcp[:, i],
+            "tmin": result.tmin[:, i],
+            "tmax": result.tmax[:, i],
+            "tavg": (result.tmin[:, i] + result.tmax[:, i]) / 2.0,
+            "irrigation": result.output.irr_sim[:, i],
+            "gw_sim": result.output.gw_sim[:, i],
+        }
+        df = pd.DataFrame(df_data, index=result.dates)
+
+        out_csv = os.path.join(out_root, f"{fid}.csv")
+        try:
+            df.to_csv(out_csv)
+            print(f"Wrote {out_csv}")
+        except Exception as e:
+            print(f"Failed to write {out_csv}: {e}")
+            write_failures.append(fid)
+
+    return write_failures
 
 
 def _ensure_shapefile(fields_path: str, conf_path: str, out_root: str | None) -> str | None:
@@ -670,7 +746,11 @@ def cmd_prep(args: argparse.Namespace) -> int:
                 if snow_source:
                     health_config["snow_source"] = snow_source
 
-                container.report(config=health_config)
+                container.report(
+                    config=health_config,
+                    output_dir=str(health_report_output_dir(container.uri)),
+                    health_profile="calibration",
+                )
             except Exception as e:
                 print(f"Health check failed: {e}")
 
@@ -758,10 +838,6 @@ def cmd_project(args: argparse.Namespace) -> int:
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
     """Run simulation and write per-site output CSVs using the process package."""
-    import tempfile
-
-    import pandas as pd
-
     conf_path = args.config
     out_root = _resolve_project_root(conf_path, args.out_dir)
 
@@ -769,54 +845,28 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     forecast_flag = bool(args.forecast_params)
     config.read_config(conf_path, project_root_override=out_root, forecast=forecast_flag)
 
-    # Resolve container path
-    container_path = getattr(config, "container_path", None)
-    if not container_path:
-        data_root = config.data_dir or out_root or os.path.dirname(os.path.abspath(conf_path))
-        container_path = os.path.join(data_root, f"{config.project_name or 'swim'}.swim")
-
+    container_path = _resolve_container_path(config, conf_path, out_root)
     if not os.path.exists(container_path):
         print(f"Container not found: {container_path}")
         print("Run 'swim prep' first to create the container.")
         return 1
 
-    # Optional spinup override
     spinup_path = args.spinup or getattr(config, "spinup", None)
+    calibrated_params_path = _resolve_calibrated_params_path(config, args.forecast_params, out_root)
 
-    # Optional forecast params (CSV) - convert to JSON format for build_swim_input
-    calibrated_params_path = None
-    if args.forecast_params:
-        config.forecast_param_csv = args.forecast_params
-        if os.path.isfile(config.forecast_param_csv):
-            config.read_forecast_parameters()
-            if hasattr(config, "forecast_parameters") and config.forecast_parameters is not None:
-                calibrated_params_path = _convert_forecast_params_to_json(
-                    config.forecast_parameters, out_root
-                )
-        else:
-            print(f"Forecast parameter CSV not found: {config.forecast_param_csv}")
-
-    os.makedirs(out_root, exist_ok=True)
-
-    # Open container and build SwimInput
     try:
         container = SwimContainer.open(container_path)
     except Exception as e:
         print(f"Failed to open container: {e}")
         return 1
 
-    # Create temporary HDF5 for SwimInput
-    temp_h5_fd, temp_h5_path = tempfile.mkstemp(suffix=".h5", prefix="swim_eval_")
-    os.close(temp_h5_fd)
-
     try:
-        # Filter fields if requested
         fields = _parse_sites_arg(args.sites)
-
-        # Build SwimInput
-        swim_input = build_swim_input(
-            container,
-            output_h5=temp_h5_path,
+        result = container.run(
+            run_id="evaluate",
+            profile="core",
+            persist=False,
+            engine="fast",
             spinup_json_path=spinup_path,
             calibrated_params_path=calibrated_params_path,
             refet_type=getattr(config, "refet_type", "eto") or "eto",
@@ -825,61 +875,15 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
             fields=fields,
             mask_mode=getattr(config, "mask_mode", "irrigation"),
         )
-
-        targets = swim_input.fids
-        n_fields = swim_input.n_fields
-        n_days = swim_input.n_days
-
-        # Run simulation
-        print(f"Running daily loop for {n_fields} site(s) over {n_days} day(s)...")
-        output, final_state = run_daily_loop(swim_input)
-
-        # Get time series data for DataFrame columns
-        dates = pd.date_range(swim_input.start_date, periods=n_days, freq="D")
-        etr = swim_input.get_time_series("ref_et")
-        prcp = swim_input.get_time_series("prcp")
-        tmin = swim_input.get_time_series("tmin")
-        tmax = swim_input.get_time_series("tmax")
-
-        # Build per-field DataFrames and write CSVs
-        write_failures: list[str] = []
-        for i, fid in enumerate(targets):
-            # Build DataFrame with available columns
-            df_data = {
-                "et_act": output.eta[:, i],
-                "etref": etr[:, i],
-                "kc_act": output.etf[:, i],
-                "kc_bas": output.kcb[:, i],
-                "ks": output.ks[:, i],
-                "ke": output.ke[:, i],
-                "melt": output.melt[:, i],
-                "rain": output.rain[:, i],
-                "depl_root": output.depl_root[:, i],
-                "dperc": output.dperc[:, i],
-                "runoff": output.runoff[:, i],
-                "swe": output.swe[:, i],
-                "ppt": prcp[:, i],
-                "tmin": tmin[:, i],
-                "tmax": tmax[:, i],
-                "tavg": (tmin[:, i] + tmax[:, i]) / 2.0,
-                "irrigation": output.irr_sim[:, i],
-                "gw_sim": output.gw_sim[:, i],
-            }
-            df = pd.DataFrame(df_data, index=dates)
-
-            out_csv = os.path.join(out_root, f"{fid}.csv")
-            try:
-                df.to_csv(out_csv)
-                print(f"Wrote {out_csv}")
-            except Exception as e:
-                print(f"Failed to write {out_csv}: {e}")
-                write_failures.append(fid)
+        print(
+            f"Running daily loop for {len(result.field_uids)} site(s) "
+            f"over {len(result.dates)} day(s)..."
+        )
+        write_failures = _write_evaluation_csvs(result, out_root)
 
         if write_failures:
             print(f"Evaluation output write failed for site(s): {', '.join(write_failures)}")
             return 1
-
-        swim_input.close()
 
     except Exception as e:
         print(f"Evaluation run failed: {e}")
@@ -889,12 +893,72 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         return 1
     finally:
         container.close()
-        # Clean up temp HDF5
-        try:
-            os.remove(temp_h5_path)
-        except Exception:
-            pass
-        # Clean up temp calibrated params JSON if created
+        if calibrated_params_path and os.path.exists(calibrated_params_path):
+            try:
+                os.remove(calibrated_params_path)
+            except Exception:
+                pass
+
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run the model and persist outputs in the target container."""
+    conf_path = args.config
+    out_root = _resolve_project_root(conf_path, args.out_dir)
+
+    config = ProjectConfig()
+    forecast_flag = bool(args.forecast_params)
+    config.read_config(conf_path, project_root_override=out_root, forecast=forecast_flag)
+
+    container_path = _resolve_container_path(config, conf_path, out_root, override=args.container)
+    if not os.path.exists(container_path):
+        print(f"Container not found: {container_path}")
+        return 1
+
+    spinup_path = args.spinup or getattr(config, "spinup", None)
+    calibrated_params_path = _resolve_calibrated_params_path(config, args.forecast_params, out_root)
+
+    try:
+        container = SwimContainer.open(container_path, mode="r+")
+    except Exception as e:
+        print(f"Failed to open container: {e}")
+        return 1
+
+    try:
+        result = container.run(
+            run_id=args.run_id,
+            profile=args.profile,
+            overwrite=args.overwrite,
+            restart_from=args.restart_from,
+            spinup_json_path=spinup_path,
+            calibrated_params_path=calibrated_params_path,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            refet_type=getattr(config, "refet_type", "eto") or "eto",
+            etf_model=getattr(config, "etf_target_model", "ssebop"),
+            met_source=getattr(config, "met_source", "gridmet"),
+            fields=_parse_sites_arg(args.sites),
+            mask_mode=getattr(config, "mask_mode", "irrigation"),
+            ndvi_mode=args.ndvi_mode,
+            command=" ".join(sys.argv),
+        )
+        container.save()
+        run_meta = container.runs.metadata(result.run_id)
+        print(f"Persisted run: {result.run_id}")
+        print(f"  Container: {container_path}")
+        print(f"  Path: simulation/runs/{result.run_id}")
+        print(f"  Profile: {run_meta.get('profile')}")
+        print(f"  Days: {run_meta.get('n_days')}")
+        print(f"  Fields: {run_meta.get('field_count')}")
+    except Exception as e:
+        print(f"Run failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+    finally:
+        container.close()
         if calibrated_params_path and os.path.exists(calibrated_params_path):
             try:
                 os.remove(calibrated_params_path)
@@ -1140,6 +1204,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip post-build health check",
     )
     pj.set_defaults(func=cmd_project)
+
+    # run
+    pr = sub.add_parser(
+        "run",
+        help="Run the model and persist outputs inside a container",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Runs SWIM from an existing container and stores outputs under simulation/runs/<run_id>.",
+    )
+    add_common(pr)
+    pr.add_argument(
+        "--container",
+        default=None,
+        help="Explicit container path override; defaults to config.container_path",
+    )
+    pr.add_argument(
+        "--run-id",
+        default=None,
+        help="Run identifier to store under simulation/runs/<run_id>; defaults to a timestamped id",
+    )
+    pr.add_argument(
+        "--profile",
+        choices=["core", "full", "state_only"],
+        default="core",
+        help="Persistence profile for stored outputs",
+    )
+    pr.add_argument(
+        "--restart-from",
+        default=None,
+        help="Persisted run id to use as the initial state",
+    )
+    pr.add_argument("--spinup", default=None, help="Path to spinup JSON (optional)")
+    pr.add_argument(
+        "--forecast-params", default=None, help="Path to forecast parameter CSV (optional)"
+    )
+    pr.add_argument(
+        "--start-date",
+        default=None,
+        help="Optional simulation start date override (YYYY-MM-DD)",
+    )
+    pr.add_argument(
+        "--end-date",
+        default=None,
+        help="Optional simulation end date override (YYYY-MM-DD)",
+    )
+    pr.add_argument(
+        "--ndvi-mode",
+        choices=["observed", "climatology"],
+        default="observed",
+        help="NDVI source mode passed to build_swim_input",
+    )
+    pr.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing persisted run with the same run id",
+    )
+    pr.set_defaults(func=cmd_run)
 
     # evaluate
     pv = sub.add_parser(
