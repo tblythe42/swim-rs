@@ -38,6 +38,7 @@ from swimrs.container.components import (
 )
 from swimrs.container.inventory import Inventory
 from swimrs.container.provenance import ProvenanceLog
+from swimrs.container.runs import RunManager
 from swimrs.container.state import ContainerState
 from swimrs.container.storage import (
     DirectoryStoreProvider,
@@ -267,6 +268,7 @@ class SwimContainer:
         self.compute = Calculator(self._state, container=self)
         self.export = Exporter(self._state, container=self)
         self.query = Query(self._state, container=self)
+        self.runs = RunManager(self)
 
     @classmethod
     def create(
@@ -697,13 +699,15 @@ class SwimContainer:
     # Index Access Helpers
     # -------------------------------------------------------------------------
 
-    def report(self, config=None, raise_on_fail=False, output_dir=None):
+    def report(self, config=None, raise_on_fail=False, output_dir=None, health_profile=None):
         """Generate container health report.
 
         Args:
             config: Dict or ProjectConfig with mask_mode, etf_target_model, etc.
             raise_on_fail: Raise ContainerHealthError on FAIL results.
             output_dir: If set, write health.json, health.html, health.png here.
+            health_profile: Optional explicit policy profile such as
+                "calibration" or "forward_run".
 
         Returns:
             HealthReport
@@ -724,10 +728,56 @@ class SwimContainer:
         else:
             config_dict = config
 
+        if health_profile is not None:
+            config_dict = dict(config_dict or {})
+            config_dict["health_profile"] = health_profile
+
         return self._inventory.report(
             config=config_dict,
             raise_on_fail=raise_on_fail,
             output_dir=output_dir,
+        )
+
+    def run(self, **kwargs):
+        """Execute a simulation run and optionally persist it in the container."""
+        return self.runs.run(**kwargs)
+
+    def list_runs(self) -> list[str]:
+        """List persisted simulation runs."""
+        return self.runs.list()
+
+    def open_run_dataset(
+        self,
+        run_id: str,
+        variables: list[str] | None = None,
+        fields: list[str] | None = None,
+        start_date: str | pd.Timestamp | None = None,
+        end_date: str | pd.Timestamp | None = None,
+    ):
+        """Open a persisted simulation run as an xarray Dataset."""
+        return self.runs.open_dataset(
+            run_id,
+            variables=variables,
+            fields=fields,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def run_dataframe(
+        self,
+        run_id: str,
+        field_uid: str,
+        variables: list[str] | None = None,
+        start_date: str | pd.Timestamp | None = None,
+        end_date: str | pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
+        """Get a persisted simulation run for one field as a DataFrame."""
+        return self.runs.to_dataframe(
+            run_id,
+            field_uid,
+            variables=variables,
+            start_date=start_date,
+            end_date=end_date,
         )
 
     def calibration_report(self, output_dir=None):
@@ -753,6 +803,32 @@ class SwimContainer:
 
             report.render_html(output_dir / "calibration.html")
             report.render_png(output_dir / "calibration.png")
+
+        return report
+
+    def run_report(self, run_id: str, output_dir=None):
+        """Generate a summary report for a persisted simulation run.
+
+        Args:
+            run_id: Persisted run identifier under ``simulation/runs``.
+            output_dir: If set, write run.json, run.html, run.png here.
+
+        Returns:
+            RunReport
+        """
+        from swimrs.container.run_report import build_run_report
+
+        report = build_run_report(self, run_id)
+
+        if output_dir is not None:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            json_path = output_dir / "run.json"
+            json_path.write_text(json.dumps(report.to_json(), indent=2))
+
+            report.render_html(output_dir / "run.html")
+            report.render_png(output_dir / "run.png")
 
         return report
 

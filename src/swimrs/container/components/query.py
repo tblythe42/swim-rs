@@ -81,7 +81,32 @@ class Query(Component):
         if time_idx is not None and len(time_idx) > 0:
             lines.append(f"  Date range: {time_idx[0].date()} to {time_idx[-1].date()}")
         lines.append(f"  Days: {self._state.n_days}")
+        default_restart = self._state.root.attrs.get("default_restart_run_id")
+        if default_restart:
+            lines.append(f"  Default restart: {default_restart}")
         lines.append("")
+
+        runs_root = (
+            self._state.root["simulation/runs"] if "simulation/runs" in self._state.root else None
+        )
+        if runs_root is not None:
+            run_ids = sorted(runs_root.keys())
+            if run_ids:
+                lines.append("SIMULATION RUNS:")
+                lines.append("-" * 40)
+                for run_id in run_ids:
+                    attrs = dict(runs_root[run_id].attrs)
+                    role = attrs.get("run_role", attrs.get("profile", "unknown"))
+                    start_date = attrs.get("start_date", "?")
+                    end_date = attrs.get("end_date", "?")
+                    field_count = attrs.get("field_count", "?")
+                    profile = attrs.get("profile", "?")
+                    lines.append(
+                        "  "
+                        f"{run_id}: role={role}, profile={profile}, "
+                        f"dates={start_date}..{end_date}, fields={field_count}"
+                    )
+                lines.append("")
 
         # List all paths in the zarr
         lines.append("DATA PATHS:")

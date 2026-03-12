@@ -82,6 +82,8 @@ from swimrs.container.metrics import (
     track_operation,
 )
 from swimrs.container.project import create_run_container
+from swimrs.container.run_report import RunReport, build_run_report
+from swimrs.container.runs import RunManager, SimulationRunResult
 from swimrs.container.schema import (
     ETModel,
     Instrument,
@@ -117,6 +119,10 @@ __all__ = [
     "open_container",
     "create_container",
     "create_run_container",
+    "RunManager",
+    "SimulationRunResult",
+    "RunReport",
+    "build_run_report",
     # Storage providers
     "StorageProvider",
     "StorageProviderFactory",
