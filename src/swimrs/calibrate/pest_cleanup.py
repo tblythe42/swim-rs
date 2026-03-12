@@ -89,16 +89,18 @@ class PestResults:
         "*.rst",
     ]
 
-    def __init__(self, pest_dir: str, project_name: str):
+    def __init__(self, pest_dir: str, project_name: str, master_dir: str | None = None):
         """
         Initialize results handler.
 
         Args:
             pest_dir: Path to pest/ directory (contains master/, pst file, etc.)
             project_name: Project name (e.g., '2_Fort_Peck')
+            master_dir: Path to master/ directory. Defaults to pest_dir/master,
+                but can be overridden when master is a sibling of pest_dir.
         """
         self.pest_dir = Path(pest_dir)
-        self.master_dir = self.pest_dir / "master"
+        self.master_dir = Path(master_dir) if master_dir else self.pest_dir / "master"
         self.project_name = project_name
 
         # Parent of pest_dir typically contains workers/

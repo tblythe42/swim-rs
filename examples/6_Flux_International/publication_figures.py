@@ -29,7 +29,6 @@ plt.rcParams.update(
         "legend.fontsize": 9,
         "figure.dpi": 300,
         "savefig.dpi": 300,
-        "savefig.bbox_inches": "tight",
         "font.family": "sans-serif",
     }
 )
@@ -56,7 +55,7 @@ def load_site_outputs(results_dir: str, sites: list[str]) -> dict[str, pd.DataFr
 def fig_site_map(shapefile: str, summary_df: pd.DataFrame, output_path: str):
     """Figure 1: Global map of flux stations colored by performance."""
     try:
-        world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+        world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"), engine="fiona")
     except Exception:
         world = gpd.read_file(
             "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip",
@@ -95,7 +94,7 @@ def fig_site_map(shapefile: str, summary_df: pd.DataFrame, output_path: str):
     ax.set_ylabel("Latitude")
     ax.set_title(f"International Flux Tower Sites (n={len(gdf)})")
 
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {output_path}")
 
@@ -177,7 +176,7 @@ def fig_scatter(results_dirs: dict[str, str], output_path: str):
         ax.set_aspect("equal")
 
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {output_path}")
 
@@ -215,7 +214,7 @@ def fig_metric_distributions(results_dirs: dict[str, str], output_path: str):
         ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {output_path}")
 
@@ -272,7 +271,7 @@ def fig_head_to_head(results_a: str, results_c: str, output_path: str):
         ax.set_title(f"{improved}/{len(common)} sites improved")
 
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {output_path}")
 
@@ -334,7 +333,7 @@ def fig_time_series(results_dir: str, sites: list[str], output_path: str):
         ax.grid(alpha=0.2)
 
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {output_path}")
 
@@ -383,7 +382,7 @@ def fig_summary_table(results_dirs: dict[str, str], output_path: str):
         table[0, j].set_facecolor("#4C72B0")
         table[0, j].set_text_props(color="white", weight="bold")
 
-    plt.savefig(output_path)
+    plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {output_path}")
 

@@ -209,6 +209,9 @@ cython_debug/
 /examples/*/*.md
 !/examples/*/README.md
 
+# Root project notes/plans
+/notes/
+
 /examples/logs/
 
 # Diagnostic scratch work

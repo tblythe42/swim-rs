@@ -123,7 +123,33 @@ spinup = "{pest_run_dir}/spinup.json"
 # python_script = "{project_workspace}/custom_forward_run.py"
 
 # ------------------------------------------------------------------------------
-# Forecast (optional)
+# Forecast parameters (optional for `swim evaluate`)
+# Set this key inside the `[forecast]` block below.
+# ------------------------------------------------------------------------------
+# forecast_parameters = "{pest_run_dir}/pest/archive/{project}.3.par.csv"
+
+# ------------------------------------------------------------------------------
+# Hindcast Run Container (optional; used by `swim project --mode hindcast`)
+# ------------------------------------------------------------------------------
+# [hindcast]
+# start_date = "1987-01-01"
+# end_date = "2025-12-31"
+# container = "{data}/{project}_hindcast.swim"
+# met_source = "gridmet"
+# ndvi_mode = "observed"
+
+# ------------------------------------------------------------------------------
+# Forecast Run Container (optional; used by `swim project --mode forecast`)
 # ------------------------------------------------------------------------------
 # [forecast]
+# Existing key used by evaluate forecast mode:
 # forecast_parameters = "{pest_run_dir}/pest/archive/{project}.3.par.csv"
+#
+# Additional keys used by run-container factory:
+# start_date = "2026-01-01"
+# end_date = "2100-12-31"
+# container = "{data}/{project}_{scenario}.swim"
+# met_source = "gridmet"  # LOCA-VIC ingestor pending; use gridmet-style directories today
+# met_dir = "{data}/met_timeseries/loca_vic/{scenario}"
+# ndvi_mode = "climatology"
+# scenarios = ["rcp45_cesm", "rcp85_cesm"]

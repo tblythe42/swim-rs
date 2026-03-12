@@ -57,7 +57,7 @@ def output_to_dataframe(output, swim_input, field_idx: int) -> pd.DataFrame:
             "depl_root": output.depl_root[:, field_idx],
             "dperc": output.dperc[:, field_idx],
             "irrigation": output.irr_sim[:, field_idx],
-            "soil_water": output.gw_sim[:, field_idx],
+            "gw_sim": output.gw_sim[:, field_idx],
         },
         index=dates,
     )

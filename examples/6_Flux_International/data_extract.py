@@ -184,6 +184,9 @@ if __name__ == "__main__":
         "--sites", type=str, default=None, help="Comma-separated site IDs to process"
     )
     parser.add_argument(
+        "--exclude", type=str, default=None, help="Comma-separated site IDs to exclude"
+    )
+    parser.add_argument(
         "--project", type=str, default="ee-dgketchum", help="Earth Engine project ID"
     )
 
@@ -195,6 +198,14 @@ if __name__ == "__main__":
 
     cfg = _load_config()
     sites = args.sites.split(",") if args.sites else None
+    exclude = set(args.exclude.split(",")) if args.exclude else set()
+    if exclude and sites:
+        sites = [s for s in sites if s not in exclude]
+    elif exclude:
+        import geopandas as gpd
+
+        gdf = gpd.read_file(cfg.fields_shapefile, engine="fiona")
+        sites = [s for s in gdf[cfg.feature_id_col] if s not in exclude]
 
     if args.era5 or args.all:
         extract_era5land(cfg, overwrite=args.overwrite, project=args.project)
