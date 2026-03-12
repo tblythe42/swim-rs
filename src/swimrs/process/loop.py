@@ -63,6 +63,45 @@ __all__ = ["run_daily_loop", "DailyOutput", "step_day"]
 IRR_BYPASS_FRAC = 0.1
 
 
+def _check_finite_state_arrays(context: str, arrays: dict[str, np.ndarray]) -> None:
+    """Raise if any tracked state array contains non-finite values."""
+    bad = {
+        name: int(np.count_nonzero(~np.isfinite(values)))
+        for name, values in arrays.items()
+        if values is not None and np.count_nonzero(~np.isfinite(values)) > 0
+    }
+    if bad:
+        details = ", ".join(f"{name}={count}" for name, count in sorted(bad.items()))
+        raise ValueError(f"Non-finite state detected at {context}: {details}")
+
+
+def _enforce_post_redistribution_invariants(
+    *,
+    context: str,
+    depl_root: np.ndarray,
+    taw_root: np.ndarray,
+    daw3: np.ndarray | None,
+    taw3: np.ndarray | None,
+    extra_arrays: dict[str, np.ndarray] | None = None,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """Bound post-redistribution storage and fail fast on non-finite state."""
+    depl_root = np.clip(depl_root, 0.0, taw_root)
+    if taw3 is not None:
+        taw3 = np.maximum(taw3, 0.0)
+    if daw3 is not None and taw3 is not None:
+        daw3 = np.clip(daw3, 0.0, taw3)
+
+    arrays_to_check = {"depl_root": depl_root, "taw_root": taw_root}
+    if daw3 is not None:
+        arrays_to_check["daw3"] = daw3
+    if taw3 is not None:
+        arrays_to_check["taw3"] = taw3
+    if extra_arrays:
+        arrays_to_check.update(extra_arrays)
+    _check_finite_state_arrays(context, arrays_to_check)
+    return depl_root, daw3, taw3
+
+
 @dataclass
 class DailyOutput:
     """Container for daily output arrays.
@@ -555,6 +594,22 @@ def step_day(
         zr_new, zr_prev, props.zr_max, props.awc, depl_root_pre_redist, daw3_pre_redist
     )
     state.zr = zr_new
+    taw_post = props.compute_taw(state.zr)
+    state.depl_root, state.daw3, state.taw3 = _enforce_post_redistribution_invariants(
+        context="step_day/post_redistribution",
+        depl_root=state.depl_root,
+        taw_root=taw_post,
+        daw3=state.daw3,
+        taw3=state.taw3,
+        extra_arrays={
+            "zr": state.zr,
+            "kr": state.kr,
+            "ks": state.ks,
+            "depl_ze": state.depl_ze,
+            "irr_frac_root": state.irr_frac_root,
+            "irr_frac_l3": state.irr_frac_l3,
+        },
+    )
 
     # 20a. Update irrigation fractions for root growth water transfer
     # Calculate water before and after redistribution to determine transfer

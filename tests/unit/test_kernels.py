@@ -8,7 +8,7 @@ Tests verify:
 """
 
 import numpy as np
-from numpy.testing import assert_array_almost_equal
+from numpy.testing import assert_allclose, assert_array_almost_equal
 
 from swimrs.process.kernels.cover import exposed_soil_fraction, fractional_cover
 
@@ -18,6 +18,7 @@ from swimrs.process.kernels.evaporation import kr_reduction
 from swimrs.process.kernels.irrigation import groundwater_subsidy, irrigation_demand
 from swimrs.process.kernels.root_growth import (
     root_depth_from_kcb,
+    root_water_redistribution,
 )
 from swimrs.process.kernels.runoff import (
     scs_runoff,
@@ -330,6 +331,28 @@ class TestRootGrowth:
 
         assert np.all(zr >= zr_min)
         assert np.all(zr <= zr_max)
+
+    def test_rapid_growth_transfer_is_bounded_by_available_layer3_water(self):
+        """Rapid growth should repartition existing water, not create new water."""
+        zr_prev = np.array([0.3910559608884386])
+        zr_new = np.array([1.0395806708952802])
+        zr_max = np.array([1.12])
+        aw = np.array([255.979])
+        depl_root = np.array([10.809060918141002])
+        daw3 = np.array([118.3037730195151])
+
+        depl_root_new, daw3_new, taw3_new = root_water_redistribution(
+            zr_new, zr_prev, zr_max, aw, depl_root, daw3
+        )
+
+        root_water_before = aw * zr_prev - depl_root
+        root_water_after = aw * zr_new - depl_root_new
+
+        assert np.all(depl_root_new >= 0.0)
+        assert np.all(depl_root_new <= aw * zr_new + 1e-10)
+        assert np.all(daw3_new >= 0.0)
+        assert np.all(daw3_new <= taw3_new + 1e-10)
+        assert_allclose(root_water_after + daw3_new, root_water_before + daw3, atol=1e-9, rtol=0.0)
 
 
 class TestIrrigation:

@@ -17,7 +17,11 @@ if TYPE_CHECKING:
     from swimrs.process.input import SwimInput
     from swimrs.process.state import CalibrationParameters, FieldProperties
 
-from swimrs.process.loop import DailyOutput
+from swimrs.process.loop import (
+    DailyOutput,
+    _check_finite_state_arrays,
+    _enforce_post_redistribution_invariants,
+)
 from swimrs.process.state import WaterBalanceState
 
 __all__ = ["run_daily_loop_fast"]
@@ -474,14 +478,19 @@ def _run_loop_jit(
         layer3_new_depth = np.maximum(0.0, zr_max - zr_new)
         taw3_new = awc * layer3_new_depth
 
-        # Growing: capture water from layer 3, increase depletion for added capacity
-        # water_from_l3 = daw3 * delta_zr / (layer3_new_depth + eps)
+        # Growing: capture a bounded fraction of previous layer-3 water.
+        layer3_prev_depth = np.maximum(0.0, zr_max - zr_prev)
+        captured_depth = np.minimum(np.maximum(delta_zr, 0.0), layer3_prev_depth)
+        added_capacity = awc * captured_depth
+        safe_prev_depth = np.where(layer3_prev_depth > 1e-6, layer3_prev_depth, 1.0)
+        capture_fraction = np.minimum(1.0, captured_depth / safe_prev_depth)
         water_from_l3 = np.where(
-            growing & (layer3_new_depth > 1e-6),
-            daw3 * delta_zr / (layer3_new_depth + 1e-6),
-            np.where(growing, daw3, 0.0),  # If layer3 fully absorbed, take all
+            growing & (layer3_prev_depth > 1e-6) & (daw3 > 0.0) & (added_capacity > 0.0),
+            daw3 * capture_fraction,
+            0.0,
         )
-        added_capacity = awc * np.maximum(0.0, delta_zr)
+        water_from_l3 = np.minimum(water_from_l3, daw3)
+        water_from_l3 = np.minimum(water_from_l3, added_capacity)
         added_depletion = added_capacity - water_from_l3
         depl_root = np.where(growing, depl_root + added_depletion, depl_root)
         daw3 = np.where(growing, np.maximum(0.0, daw3 - water_from_l3), daw3)
@@ -505,8 +514,15 @@ def _run_loop_jit(
         # The kernel always returns taw3_new = awc * (zr_max - zr_new)
         taw3 = taw3_new
 
+        # Enforce bounded storage before persisting daily outputs
+        taw_root_new = awc * zr_new
+        taw_root_new = np.maximum(taw_root_new, 0.001)
+        taw_root_new = np.maximum(taw_root_new, tew)
+        depl_root = np.minimum(np.maximum(depl_root, 0.0), taw_root_new)
+
         # Ensure daw3 doesn't exceed taw3
-        daw3 = np.minimum(daw3, taw3)
+        taw3 = np.maximum(taw3, 0.0)
+        daw3 = np.minimum(np.maximum(daw3, 0.0), taw3)
 
         zr = zr_new
 
@@ -754,8 +770,33 @@ def run_daily_loop_fast(
     output.dperc = out_dperc
     output.irr_sim = out_irr_sim
     output.gw_sim = out_gw_sim
+    _check_finite_state_arrays(
+        "run_daily_loop_fast/output",
+        {
+            "eta": output.eta,
+            "etf": output.etf,
+            "runoff": output.runoff,
+            "swe": output.swe,
+            "depl_root": output.depl_root,
+            "dperc": output.dperc,
+        },
+    )
 
     # Package final state
+    taw_root_final = props.compute_taw(final_zr)
+    final_depl_root, final_daw3, final_taw3 = _enforce_post_redistribution_invariants(
+        context="run_daily_loop_fast/final_state",
+        depl_root=final_depl_root,
+        taw_root=taw_root_final,
+        daw3=final_daw3,
+        taw3=final_taw3,
+        extra_arrays={
+            "zr": final_zr,
+            "kr": final_kr,
+            "ks": final_ks,
+            "depl_ze": final_depl_ze,
+        },
+    )
     final_state = WaterBalanceState.from_spinup(
         n_fields=n_fields,
         depl_root=final_depl_root,

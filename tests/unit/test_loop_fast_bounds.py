@@ -195,6 +195,64 @@ class TestPhysicalBounds:
         taw_max = inp["awc"] * inp["zr_max"]
         assert np.all(out["depl_root"] <= taw_max[np.newaxis, :] + 1e-10)
 
+    def test_rapid_root_growth_stays_bounded(self):
+        inputs = _make_inputs(
+            n_days=1,
+            n_fields=1,
+            all_ndvi=np.array([[0.4050142467021942]]),
+            all_etr=np.array([[0.8576244711875916]]),
+            all_prcp=np.array([[0.0]]),
+            all_tmin=np.array([[-11.649999618530273]]),
+            all_tmax=np.array([[4.349999904632568]]),
+            all_srad=np.array([[83.0]]),
+            all_irr_flag=np.array([[0.0]]),
+            awc=np.array([255.979]),
+            rew=np.array([3.0]),
+            tew=np.array([18.0]),
+            cn2=np.array([77.0]),
+            zr_max=np.array([1.12]),
+            zr_min=np.array([0.1]),
+            mad=np.array([0.464604]),
+            irr_status=np.array([1.0]),
+            perennial=np.array([0.0]),
+            gw_status=np.array([1.0]),
+            ke_max=np.array([0.6048164367675781]),
+            f_sub=np.array([0.0]),
+            kc_max=np.array([1.35]),
+            kc_min=np.array([0.15]),
+            ndvi_k=np.array([12.3823]),
+            ndvi_0=np.array([0.196214]),
+            swe_alpha=np.array([0.332399]),
+            swe_beta=np.array([1.60911]),
+            kr_damp=np.array([0.827802]),
+            ks_damp=np.array([0.768962]),
+            max_irr_rate=np.array([100.0]),
+            depl_root_init=np.array([9.748238477427876]),
+            depl_ze_init=np.array([5.302519881448234]),
+            swe_init=np.array([0.0]),
+            albedo_init=np.array([0.6281947416645687]),
+            kr_init=np.array([0.8730189608889664]),
+            ks_init=np.array([1.0]),
+            zr_init=np.array([0.3910559608884386]),
+            s_init=np.array([84.7]),
+            s1_init=np.array([84.7]),
+            s2_init=np.array([84.7]),
+            s3_init=np.array([84.7]),
+            s4_init=np.array([84.7]),
+            daw3_init=np.array([118.3037730195151]),
+            taw3_init=np.array([186.59436618773844]),
+        )
+        out = _unpack(_run_loop_jit(**inputs))
+        taw = inputs["awc"] * out["final_zr"]
+        taw = np.maximum(taw, 18.0)
+
+        assert np.all(np.isfinite(out["depl_root"]))
+        assert np.all(out["dperc"] >= 0.0)
+        assert np.all(out["depl_root"] >= 0.0)
+        assert np.all(out["depl_root"] <= taw[np.newaxis, :] + 1e-10)
+        assert np.all(out["final_daw3"] >= 0.0)
+        assert np.all(out["final_daw3"] <= out["final_taw3"] + 1e-10)
+
 
 class TestStateImmutability:
     def test_initial_arrays_unchanged(self):

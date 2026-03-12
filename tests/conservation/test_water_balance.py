@@ -734,10 +734,8 @@ class TestRootGrowthConservation:
     def test_root_growth_into_layer3(self):
         """Root growth captures water from layer 3.
 
-        Note: Uses moderate NDVI to avoid excessive root growth which can
-        trigger a known limitation in the legacy redistribution algorithm
-        where more water is calculated for transfer than is available in
-        layer 3.
+        Note: Uses moderate NDVI so the redistribution path is exercised
+        without relying on the rapid-growth regression below.
         """
         state, props, params = create_test_setup(
             n_fields=1,
@@ -765,14 +763,8 @@ class TestRootGrowthConservation:
             # Water was redistributed - balance check already verified conservation
             pass
 
-    def test_rapid_root_growth_known_limitation(self):
-        """Rapid root growth can violate mass conservation (known limitation).
-
-        When roots grow significantly in a single step (large delta_zr
-        relative to remaining layer 3 depth), the legacy redistribution
-        formula can calculate more water transfer from layer 3 than is
-        actually available. This test documents this behavior.
-        """
+    def test_rapid_root_growth_conserves_mass(self):
+        """Rapid root growth must conserve mass and keep storage bounded."""
         state, props, params = create_test_setup(
             n_fields=1,
             depl_root=20.0,
@@ -789,31 +781,60 @@ class TestRootGrowthConservation:
             ndvi=0.7,  # High NDVI causes rapid root growth
         )
 
-        compute_total_water(state, props)[0]
-        state_before = state.copy()
+        run_step_with_balance_check(state, props, params, inputs)
 
-        day_out = step_day(
-            state,
-            props,
-            params,
-            inputs["ndvi"],
-            inputs["etr"],
-            inputs["prcp"],
-            inputs["tmin"],
-            inputs["tmax"],
-            inputs["srad"],
-            inputs["irr_flag"],
+        taw = props.compute_taw(state.zr)
+        assert 0.0 <= state.depl_root[0] <= taw[0]
+        assert 0.0 <= state.daw3[0] <= state.taw3[0]
+
+    def test_field_675_style_growth_spike_conserves_mass(self):
+        """Regression for the hindcast day-1 redistribution blow-up shape."""
+        state, props, params = create_test_setup(
+            n_fields=1,
+            depl_root=9.748238477427876,
+            daw3=118.3037730195151,
+            zr=0.3910559608884386,
+            awc=255.979,
+            zr_max=1.12,
+            irr_status=True,
+            gw_status=True,
+            perennial=False,
+            f_sub=0.0,
+        )
+        state.depl_ze[:] = 5.302519881448234
+        state.albedo[:] = 0.6281947416645687
+        state.kr[:] = 0.8730189608889664
+        state.ks[:] = 1.0
+
+        props.ksat[:] = 9.119653701782227
+        props.mad[:] = 0.464604
+        props.ke_max[:] = 0.6048164367675781
+        props.kc_max[:] = 1.35
+
+        params.ndvi_k[:] = 12.3823
+        params.ndvi_0[:] = 0.196214
+        params.swe_alpha[:] = 0.332399
+        params.swe_beta[:] = 1.60911
+        params.kr_damp[:] = 0.827802
+        params.ks_damp[:] = 0.768962
+        params.max_irr_rate[:] = 100.0
+
+        inputs = create_daily_inputs(
+            n_fields=1,
+            ndvi=0.4050142467021942,
+            etr=0.8576244711875916,
+            prcp=0.0,
+            tmin=-11.649999618530273,
+            tmax=4.349999904632568,
+            srad=83.0,
+            irr_flag=False,
         )
 
-        error = compute_water_balance_error(state_before, state, props, day_out, inputs["prcp"])
+        day_out = run_step_with_balance_check(state, props, params, inputs)
 
-        # Document that significant error can occur with rapid root growth
-        # This is a known limitation of the legacy algorithm
-        # The test passes if we get here without crashing - we're just
-        # documenting the behavior
-        if np.abs(error[0]) > 1.0:  # More than 1mm imbalance
-            # This is expected for rapid root growth scenarios
-            pass
+        assert day_out["dperc"][0] == 0.0
+        assert state.depl_root[0] >= 0.0
+        assert state.daw3[0] >= 0.0
 
     def test_root_recession(self):
         """Root recession returns water to layer 3."""
