@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 
@@ -38,6 +39,9 @@ class HealthPolicy:
     """Declarative health contract mapping config choices to data requirements."""
 
     VERSION = "1.0"
+    PROFILE_CALIBRATION = "calibration"
+    PROFILE_FORWARD_RUN = "forward_run"
+    PROFILE_GENERIC = "generic"
 
     BASE_RULES = [
         PolicyRule(
@@ -94,6 +98,7 @@ class HealthPolicy:
     def for_config(cls, config: dict) -> list[PolicyRule]:
         """Return all applicable rules for the given config."""
         rules = list(cls.BASE_RULES)
+        health_profile = str(config.get("health_profile") or cls.PROFILE_GENERIC).strip().lower()
 
         for rule in cls.CONDITIONAL_RULES:
             cfg_val = config.get(rule.config_key)
@@ -130,7 +135,7 @@ class HealthPolicy:
 
         # Dynamic rules for etf_target_model
         etf_model = config.get("etf_target_model")
-        if etf_model:
+        if etf_model and health_profile != cls.PROFILE_FORWARD_RUN:
             mask = "irr" if mask_mode == "irrigation" else "inv_irr"
             path = f"remote_sensing/etf/landsat/{etf_model}/{mask}"
             rules.append(
@@ -173,7 +178,7 @@ class HealthPolicy:
 
         # Dynamic rules for ensemble members
         members = config.get("etf_ensemble_members")
-        if members:
+        if members and health_profile != cls.PROFILE_FORWARD_RUN:
             mask = "irr" if mask_mode == "irrigation" else "inv_irr"
             for member in members:
                 path = f"remote_sensing/etf/landsat/{member}/{mask}"
@@ -235,7 +240,7 @@ class HealthPolicy:
 
         # Dynamic rule for snow_source
         snow_source = config.get("snow_source")
-        if snow_source:
+        if snow_source and health_profile != cls.PROFILE_FORWARD_RUN:
             rules.append(
                 PolicyRule(
                     "snow_source",
@@ -287,11 +292,21 @@ class HealthReport:
     checks: list[CheckResult]
     policy_version: str
     container_fingerprint: str
+    health_profile: str = HealthPolicy.PROFILE_GENERIC
     config_hash: str | None = None
 
     @property
     def passed(self) -> bool:
         return not any(c.severity == "FAIL" for c in self.checks)
+
+    @property
+    def display_profile(self) -> str:
+        labels = {
+            HealthPolicy.PROFILE_CALIBRATION: "Calibration Run",
+            HealthPolicy.PROFILE_FORWARD_RUN: "Forward Run",
+            HealthPolicy.PROFILE_GENERIC: "Generic",
+        }
+        return labels.get(self.health_profile, self.health_profile.replace("_", " ").title())
 
     @property
     def failures(self) -> list[CheckResult]:
@@ -311,6 +326,7 @@ class HealthReport:
         lines = [
             f"Container Health: {status}",
             f"  Path: {self.container_path}",
+            f"  Profile: {self.display_profile}",
             f"  Fields: {self.n_fields}  Days: {self.n_days}  "
             f"Range: {self.date_range[0]} to {self.date_range[1]}",
             f"  Checks: {n_pass} pass, {n_warn} warn, {n_fail} fail",
@@ -338,6 +354,7 @@ class HealthReport:
             "n_days": self.n_days,
             "date_range": list(self.date_range),
             "passed": self.passed,
+            "health_profile": self.health_profile,
             "policy_version": self.policy_version,
             "container_fingerprint": self.container_fingerprint,
             "config_hash": self.config_hash,
@@ -399,6 +416,9 @@ class ContainerHealthCheck:
         if self._config:
             config_json = json.dumps(self._config, sort_keys=True, default=str)
             config_hash = f"sha256:{hashlib.sha256(config_json.encode()).hexdigest()}"
+        health_profile = (
+            str(self._config.get("health_profile") or HealthPolicy.PROFILE_GENERIC).strip().lower()
+        )
 
         # Get date range
         date_range = ("unknown", "unknown")
@@ -423,6 +443,7 @@ class ContainerHealthCheck:
             checks=self._checks,
             policy_version=HealthPolicy.VERSION,
             container_fingerprint=fp,
+            health_profile=health_profile,
             config_hash=config_hash,
         )
 
@@ -939,7 +960,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Container Health Report</title>
+<title>Container Health Report - {{ report.display_profile }}</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
        max-width: 1000px; margin: 40px auto; padding: 0 20px; color: #333; }
@@ -959,7 +980,7 @@ tr.pass { background: #f0fff4; }
 </style>
 </head>
 <body>
-<h1>Container Health Report</h1>
+<h1>Container Health Report - {{ report.display_profile }}</h1>
 <p class="status-{{ 'pass' if report.passed else 'fail' }}">
   Overall: {{ 'PASS' if report.passed else 'FAIL' }}
 </p>
@@ -967,6 +988,7 @@ tr.pass { background: #f0fff4; }
 <h2>Overview</h2>
 <table>
 <tr><td>Container</td><td>{{ report.container_path }}</td></tr>
+<tr><td>Profile</td><td>{{ report.display_profile }}</td></tr>
 <tr><td>Fields</td><td>{{ report.n_fields }}</td></tr>
 <tr><td>Days</td><td>{{ report.n_days }}</td></tr>
 <tr><td>Date Range</td><td>{{ report.date_range[0] }} to {{ report.date_range[1] }}</td></tr>
@@ -1083,6 +1105,35 @@ def render_summary_png(report: HealthReport, output_path: str | Path) -> Path:
     fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
     plt.close(fig)
     return output_path
+
+
+def health_report_output_dir(
+    container_path: str | Path,
+    *,
+    base_dir: str | Path | None = None,
+    timestamp: datetime | None = None,
+) -> Path:
+    """Build a timestamped directory for persisted health-report artifacts."""
+
+    stamp = (timestamp or datetime.now(UTC)).strftime("%Y%m%dT%H%M%S%fZ")
+
+    if base_dir is None:
+        container_root = _container_path_to_local_path(container_path)
+        root = Path(f"{container_root}.reports")
+    else:
+        root = Path(base_dir)
+
+    return root / "health" / stamp
+
+
+def _container_path_to_local_path(container_path: str | Path) -> Path:
+    """Resolve file:// URIs and plain paths to a local filesystem path."""
+
+    path_str = str(container_path)
+    parsed = urlparse(path_str)
+    if parsed.scheme == "file":
+        return Path(unquote(parsed.path))
+    return Path(path_str)
 
 
 # ---------------------------------------------------------------------------

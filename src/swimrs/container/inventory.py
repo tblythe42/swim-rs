@@ -7,6 +7,7 @@ coverage statistics, and readiness checks.
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swimrs.container.schema import SwimSchema
@@ -545,30 +546,32 @@ class Inventory:
         config_dict = config if isinstance(config, dict) else {}
         checker = ContainerHealthCheck(self._root, self._field_uids, config=config_dict)
         report = checker.run()
+        out = Path(output_dir) if output_dir else None
 
         # Store health check summary in container attrs for downstream gates
         try:
             from datetime import UTC, datetime
 
-            self._root.attrs["last_health_check"] = {
+            health_attrs = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "fingerprint": report.container_fingerprint,
                 "passed": report.passed,
+                "health_profile": report.health_profile,
                 "n_checks": len(report.checks),
                 "n_fail": len(report.failures),
                 "n_warn": len(report.warnings),
                 "policy_version": report.policy_version,
                 "config_hash": report.config_hash,
             }
+            if out is not None:
+                health_attrs["report_dir"] = str(out)
+            self._root.attrs["last_health_check"] = health_attrs
         except Exception:
             pass  # read-only container or other write failure
 
         print(report.summary())
 
-        if output_dir:
-            from pathlib import Path
-
-            out = Path(output_dir)
+        if out is not None:
             out.mkdir(parents=True, exist_ok=True)
             report.write_json(out / "health.json")
             render_html_report(report, out / "health.html")
@@ -576,6 +579,7 @@ class Inventory:
                 render_summary_png(report, out / "health.png")
             except Exception as e:
                 print(f"Warning: could not render health.png: {e}")
+            print(f"Saved health report: {out}")
 
         if raise_on_fail and not report.passed:
             raise ContainerHealthError(report)

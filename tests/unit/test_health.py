@@ -151,6 +151,25 @@ def test_policy_ensemble_members_adds_member_rules():
     assert "remote_sensing/etf/landsat/sims/irr" in paths
 
 
+def test_policy_forward_run_profile_excludes_calibration_targets():
+    rules = HealthPolicy.for_config(
+        {
+            "health_profile": "forward_run",
+            "mask_mode": "irrigation",
+            "met_source": "gridmet",
+            "snow_source": "snodas",
+            "etf_target_model": "ensemble",
+            "etf_ensemble_members": ["ssebop", "sims"],
+        }
+    )
+    paths = [r.required_path for r in rules]
+    assert "properties/irrigation/irr" in paths
+    assert "meteorology/gridmet/eto" in paths
+    assert "snow/snodas/swe" not in paths
+    assert "remote_sensing/etf/landsat/ensemble/irr" not in paths
+    assert "remote_sensing/etf/landsat/ssebop/irr" not in paths
+
+
 # ---------------------------------------------------------------------------
 # ContainerHealthCheck tests
 # ---------------------------------------------------------------------------
@@ -260,6 +279,38 @@ def test_policy_etf_target_model_missing_is_fail():
     assert any(c.severity == "FAIL" for c in etf_policy)
 
 
+def test_forward_run_profile_does_not_fail_missing_calibration_targets():
+    root = _FakeRoot(
+        {
+            "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
+            "geometry/uid": _FakeArray(["0"]),
+            "properties/soils/awc": _FakeArray(np.array([0.15])),
+            "properties/soils/clay": _FakeArray(np.array([25.0])),
+            "properties/land_cover/modis_lc": _FakeArray(np.array([12], dtype="int16")),
+            "properties/irrigation/irr": _FakeArray(np.array([0.5])),
+            "properties/irrigation/irr_yearly": _FakeArray(['{"2020": {"irrigated": 1}}']),
+            "meteorology/gridmet/eto": _FakeArray(np.array([[5.0]])),
+            "remote_sensing/ndvi/landsat/irr": _FakeArray(np.array([[0.6]])),
+            "remote_sensing/ndvi/landsat/inv_irr": _FakeArray(np.array([[0.4]])),
+        }
+    )
+    config = {
+        "health_profile": "forward_run",
+        "mask_mode": "irrigation",
+        "met_source": "gridmet",
+        "snow_source": "snodas",
+        "etf_target_model": "ensemble",
+        "etf_ensemble_members": ["ssebop", "sims"],
+    }
+    checker = ContainerHealthCheck(root, ["0"], config=config)
+    report = checker.run()
+
+    policy_fail_paths = {c.path for c in report.failures if c.section == "policy"}
+    assert "snow/snodas/swe" not in policy_fail_paths
+    assert "remote_sensing/etf/landsat/ensemble/irr" not in policy_fail_paths
+    assert report.passed is True
+
+
 def test_zero_irrigated_fields_is_warn():
     irr_data = [
         '{"2020": {"irrigated": 0, "f_irr": 0.0}, "2021": {"irrigated": 0, "f_irr": 0.0}}'
@@ -327,7 +378,9 @@ def test_raise_on_fail():
 
 def test_report_to_json_roundtrip():
     root = _make_healthy_root(5)
-    checker = ContainerHealthCheck(root, [str(i) for i in range(5)])
+    checker = ContainerHealthCheck(
+        root, [str(i) for i in range(5)], config={"health_profile": "forward_run"}
+    )
     report = checker.run()
 
     data = report.to_json()
@@ -335,6 +388,7 @@ def test_report_to_json_roundtrip():
     assert "checks" in data
     assert "passed" in data
     assert data["passed"] is True
+    assert data["health_profile"] == "forward_run"
 
     # Roundtrip through JSON
     json_str = json.dumps(data)
@@ -354,7 +408,9 @@ def test_fingerprint_deterministic():
 
 def test_html_report_renders():
     root = _make_healthy_root(5)
-    checker = ContainerHealthCheck(root, [str(i) for i in range(5)])
+    checker = ContainerHealthCheck(
+        root, [str(i) for i in range(5)], config={"health_profile": "forward_run"}
+    )
     report = checker.run()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -362,7 +418,7 @@ def test_html_report_renders():
         result = render_html_report(report, out_path)
         assert result.exists()
         content = result.read_text()
-        assert "Container Health Report" in content
+        assert "Container Health Report - Forward Run" in content
         assert "PASS" in content
 
 
