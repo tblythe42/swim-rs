@@ -383,6 +383,7 @@ end_date = "2020-12-31"
 runoff_process = "ier"
 refet_type = "etr"
 irrigation_threshold = 0.5
+max_irr_rate = 25.0
 elev_units = "ft"
 """
         toml_file = tmp_path / "config.toml"
@@ -394,6 +395,38 @@ elev_units = "ft"
         config = ProjectConfig()
         with pytest.raises(ValueError, match="Only 'cn' is supported"):
             config.read_config(str(config_with_misc))
+
+    def test_read_config_loads_max_irr_rate(self, tmp_path):
+        """read_config loads max_irr_rate from misc settings."""
+        gis_dir = tmp_path / "gis"
+        gis_dir.mkdir()
+        shapefile = gis_dir / "fields.shp"
+        shapefile.touch()
+
+        toml_content = f"""
+project = "test_project"
+root = "{tmp_path}"
+
+[paths]
+fields_shapefile = "{shapefile}"
+
+[ids]
+feature_id = "FID"
+
+[date_range]
+start_date = "2020-01-01"
+end_date = "2020-12-31"
+
+[misc]
+max_irr_rate = 25.0
+"""
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text(toml_content)
+
+        config = ProjectConfig()
+        config.read_config(str(toml_file))
+
+        assert config.max_irr_rate == 25.0
 
     def test_read_config_without_runoff_process_is_valid(self, tmp_path):
         """Configs without runoff_process remain valid."""
@@ -423,6 +456,7 @@ end_date = "2020-12-31"
         config.read_config(str(toml_file))
 
         assert config.refet_type is None
+        assert config.max_irr_rate == 100.0
 
 
 class TestResolvePathsEdgeCases:

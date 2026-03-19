@@ -874,6 +874,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
             met_source=getattr(config, "met_source", "gridmet"),
             fields=fields,
             mask_mode=getattr(config, "mask_mode", "irrigation"),
+            max_irr_rate=getattr(config, "max_irr_rate", 100.0) or 100.0,
         )
         print(
             f"Running daily loop for {len(result.field_uids)} site(s) "
@@ -941,6 +942,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             fields=_parse_sites_arg(args.sites),
             mask_mode=getattr(config, "mask_mode", "irrigation"),
             ndvi_mode=args.ndvi_mode,
+            max_irr_rate=getattr(config, "max_irr_rate", 100.0) or 100.0,
             command=" ".join(sys.argv),
         )
         container.save()

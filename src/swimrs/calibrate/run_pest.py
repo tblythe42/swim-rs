@@ -46,6 +46,7 @@ def run_pst(
         ...     master_dir='/path/to/master'
         ... )
     """
+    original_cwd = os.getcwd()
     try:
         os.chdir(worker_root)
         [print(f"rmtree: {os.path.join(worker_root, d)}") for d in os.listdir(worker_root)]
@@ -62,19 +63,22 @@ def run_pst(
     if not os.path.isdir(_dir):
         raise ValueError(f"The pest directory {_dir} does not exist, run pest_builder.py")
 
-    os.chdir(_dir)
+    try:
+        os.chdir(_dir)
 
-    os_utils.start_workers(
-        _dir,
-        _cmd,
-        pst_rel_path=pst_file,
-        num_workers=num_workers,
-        worker_root=worker_root,
-        verbose=verbose,
-        master_dir=master_dir,
-        cleanup=cleanup,
-        port=5005,
-    )
+        os_utils.start_workers(
+            _dir,
+            _cmd,
+            pst_rel_path=pst_file,
+            num_workers=num_workers,
+            worker_root=worker_root,
+            verbose=verbose,
+            master_dir=master_dir,
+            cleanup=cleanup,
+            port=5005,
+        )
+    finally:
+        os.chdir(original_cwd)
 
 
 if __name__ == "__main__":

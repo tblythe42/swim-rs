@@ -250,6 +250,7 @@ class RunManager:
         empirical_kc_max: bool = False,
         mask_mode: str = "irrigation",
         ndvi_mode: str = "observed",
+        max_irr_rate: float = 100.0,
         command: str | None = None,
         run_attrs: dict[str, Any] | None = None,
         use_default_restart: bool = True,
@@ -309,6 +310,7 @@ class RunManager:
                 empirical_kc_max=empirical_kc_max,
                 mask_mode=mask_mode,
                 ndvi_mode=ndvi_mode,
+                max_irr_rate=max_irr_rate,
             )
 
             try:

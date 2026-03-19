@@ -76,6 +76,7 @@ class ProjectConfig:
         # Runtime settings
         self.irrigation_threshold = None
         self.irr_threshold = None
+        self.max_irr_rate = None
         self.elev_units = None
         self.refet_type = None
         self.start_dt = None
@@ -314,6 +315,7 @@ class ProjectConfig:
         # Model settings
         self.irrigation_threshold = misc_conf.get("irrigation_threshold")
         self.irr_threshold = self.irrigation_threshold
+        self.max_irr_rate = misc_conf.get("max_irr_rate", 100.0)
         self.elev_units = misc_conf.get("elev_units", "m")
         self.refet_type = misc_conf.get("refet_type")
         # IER has been retired; only Curve Number runoff is supported.

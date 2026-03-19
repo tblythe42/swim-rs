@@ -446,6 +446,7 @@ def build_swim_input(
     empirical_kc_max: bool = False,
     mask_mode: str = "irrigation",
     ndvi_mode: str = "observed",
+    max_irr_rate: float = 100.0,
 ) -> SwimInput:
     """Build HDF5 input file from SwimContainer.
 
@@ -488,6 +489,9 @@ def build_swim_input(
         ``"observed"`` (default) reads time-series NDVI from the container.
         ``"climatology"`` reads ``derived/ndvi_climatology/{mask}`` and
         tiles the 366-day cycle across the simulation period.
+    max_irr_rate : float
+        Maximum daily irrigation application rate (mm/day). Defaults to 100.0
+        for backward compatibility when not specified in project config.
 
     Returns
     -------
@@ -586,7 +590,14 @@ def build_swim_input(
         )
 
         # Write parameters
-        _write_parameters_from_container(h5, container_data, fids, n_fields, calibrated_params)
+        _write_parameters_from_container(
+            h5,
+            container_data,
+            fids,
+            n_fields,
+            calibrated_params,
+            max_irr_rate=max_irr_rate,
+        )
 
         # Write time series from container data
         _write_time_series_from_container(
@@ -961,6 +972,7 @@ def _write_parameters_from_container(
     fids: list[str],
     n_fields: int,
     calibrated_params: dict[str, NDArray[np.float64]] | None = None,
+    max_irr_rate: float = 100.0,
 ):
     """Write calibration parameters to HDF5."""
     params_group = h5.create_group("parameters")
@@ -991,7 +1003,7 @@ def _write_parameters_from_container(
     swe_beta = np.full(n_fields, 2.0)
     kr_damp = np.full(n_fields, 0.2)
     ks_damp = np.full(n_fields, 0.2)
-    max_irr_rate = np.full(n_fields, 100.0)
+    max_irr_rate_arr = np.full(n_fields, float(max_irr_rate))
 
     # Override with calibrated values (masked: only where non-NaN)
     if calibrated_params is not None:
@@ -1014,7 +1026,7 @@ def _write_parameters_from_container(
     params_group.create_dataset("swe_beta", data=swe_beta)
     params_group.create_dataset("kr_damp", data=kr_damp)
     params_group.create_dataset("ks_damp", data=ks_damp)
-    params_group.create_dataset("max_irr_rate", data=max_irr_rate)
+    params_group.create_dataset("max_irr_rate", data=max_irr_rate_arr)
 
 
 def _write_time_series_from_container(
