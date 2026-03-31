@@ -119,6 +119,7 @@ addopts = "-v --tb=short"
 
 [tool.uv.sources]
 agweatherqaqc = { path = "../agweather-qaqc", editable = true }
+openet-ptjpl = { path = "../openet-ptjpl", editable = true }
 
 [dependency-groups]
 dev = [
@@ -126,4 +127,5 @@ dev = [
     "ipykernel>=7.1.0",
     "kaleido>=1.2.0",
     "nbconvert>=7.17.0",
+    "openet-ptjpl",
 ]

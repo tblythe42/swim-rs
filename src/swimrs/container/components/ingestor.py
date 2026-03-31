@@ -186,11 +186,16 @@ def _parse_single_csv(
     series_list = []
     for _, row in df.iterrows():
         raw_id = row[uid_column]
-        # iterrows() upcasts int→float; normalize "1.0" → "1"
-        try:
-            raw_id = int(raw_id)
-        except (ValueError, TypeError):
-            pass
+        # iterrows() upcasts int→float; normalize "1.0" → "1".
+        # Only coerce plain numeric strings — do NOT coerce underscore-delimited
+        # UIDs like "001_000001" (Python's int() accepts "_" as a separator,
+        # which would silently corrupt "001_000001" → 1000001).
+        raw_str = str(raw_id)
+        if raw_str.replace(".", "", 1).isdigit():
+            try:
+                raw_id = int(float(raw_id))
+            except (ValueError, TypeError):
+                pass
         field_id = str(raw_id)
 
         if fields_set and field_id not in fields_set:
@@ -345,6 +350,7 @@ class Ingestor(Component):
         overwrite: bool = False,
         min_etf: float = 0.05,
         workers: int = 1,
+        scale_factor: float = 1.0,
     ) -> ProvenanceEvent:
         """
         Ingest ET fraction data from Earth Engine CSV exports.
@@ -360,6 +366,9 @@ class Ingestor(Component):
             min_etf: Minimum valid ETf value (default: 0.05). Values below
                 this are treated as noise/artifacts and set to NaN.
             workers: Number of threads for parallel CSV reading (default: 1)
+            scale_factor: Multiply all ETf values by this factor (default: 1.0).
+                Use to apply a uniform algorithm bias correction (e.g., 0.80
+                for a 20% reduction in PT-JPL ETf).
 
         Returns:
             ProvenanceEvent recording the operation
@@ -407,6 +416,9 @@ class Ingestor(Component):
             # 0.0 with NaN and filters values < 0.05
             all_data = all_data.where(all_data >= min_etf)
 
+            if scale_factor != 1.0:
+                all_data = all_data * scale_factor
+
             # Align to container grid and write
             records = self._write_timeseries(path, all_data, fields, overwrite=overwrite)
 
@@ -420,6 +432,88 @@ class Ingestor(Component):
                 source=str(source_dir),
                 source_format="earth_engine_csv",
                 params={"model": model, "instrument": instrument, "mask": mask},
+                fields_affected=list(all_data.columns),
+                records_count=records,
+            )
+
+            self._state.mark_modified()
+            self._state.refresh()
+
+            return event
+
+    def eta(
+        self,
+        source_dir: str | Path,
+        uid_column: str = "FID",
+        mask: str = "irr",
+        instrument: str = "landsat",
+        fields: list[str] | None = None,
+        overwrite: bool = False,
+        workers: int = 1,
+    ) -> ProvenanceEvent:
+        """Ingest monthly ETa from OpenET ensemble CSV exports.
+
+        Expects column names in format ``ensemble_eta_YYYYMM01`` (first of
+        month), as produced by ``sid_prepped.py``.
+
+        Args:
+            source_dir: Directory containing CSV files
+            uid_column: Column name for field UID in CSVs (default: "FID")
+            mask: Mask type ("irr", "inv_irr", "no_mask")
+            instrument: Source instrument (default: "landsat")
+            fields: Optional list of field UIDs to process
+            overwrite: If True, replace existing data
+            workers: Number of threads for parallel CSV reading (default: 1)
+
+        Returns:
+            ProvenanceEvent recording the operation
+        """
+        self._ensure_writable()
+        source_dir = Path(source_dir)
+        path = f"remote_sensing/eta/{instrument}/ensemble/{mask}"
+
+        with self._track_operation(
+            "ingest_eta",
+            target=path,
+            source=str(source_dir),
+            instrument=instrument,
+            mask=mask,
+        ) as ctx:
+            if path in self._state.root and not overwrite:
+                raise ValueError(f"Data exists at {path}. Use overwrite=True.")
+
+            all_data = self._parse_ee_remote_sensing_csvs(
+                source_dir,
+                instrument,
+                "eta",
+                uid_column,
+                fields,
+                mask=mask,
+                workers=workers,
+            )
+
+            if all_data.empty:
+                self._log.warning("no_data_found", source=str(source_dir))
+                return self._state.provenance.record(
+                    "ingest",
+                    target=path,
+                    source=str(source_dir),
+                    params={"instrument": instrument, "mask": mask},
+                    records_count=0,
+                    success=True,
+                )
+
+            records = self._write_timeseries(path, all_data, fields, overwrite=overwrite)
+
+            ctx["records_processed"] = records
+            ctx["fields_processed"] = len(all_data.columns)
+
+            event = self._state.provenance.record(
+                "ingest",
+                target=path,
+                source=str(source_dir),
+                source_format="earth_engine_csv",
+                params={"instrument": instrument, "mask": mask},
                 fields_affected=list(all_data.columns),
                 records_count=records,
             )

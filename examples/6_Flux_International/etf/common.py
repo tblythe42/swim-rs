@@ -120,10 +120,25 @@ def export_table_to_gcs(data, desc, bucket, fn_prefix, selectors):
             print(f"Payload size limit exceeded for {desc}. Skipping task.")
             return False
 
+        elif "already started with the given request_id" in error_message:
+            # Task was already submitted (e.g. by a parallel process) — treat as success
+            print(f"{desc} already submitted, skipping.")
+            return True
+
         elif "many tasks already in the queue" in error_message:
             print(f"Task queue full. Waiting 10 minutes to retry {desc}...")
             time.sleep(600)
-            task.start()
+            # Recreate the task — reusing the same object fails with
+            # "A different Operation was already started with the given request_id"
+            retry_task = ee.batch.Export.table.toCloudStorage(
+                data,
+                description=desc,
+                bucket=bucket,
+                fileNamePrefix=fn_prefix,
+                fileFormat="CSV",
+                selectors=selectors,
+            )
+            retry_task.start()
             print(desc, flush=True)
             return True
 

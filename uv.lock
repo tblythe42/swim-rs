@@ -1328,14 +1328,24 @@ sdist = { url = "https://files.pythonhosted.org/packages/d8/a3/d69f693a9d36354fb
 
 [[package]]
 name = "openet-ptjpl"
-version = "0.4.1"
-source = { registry = "https://pypi.org/simple" }
+version = "0.5.0"
+source = { editable = "../openet-ptjpl" }
 dependencies = [
     { name = "earthengine-api" },
     { name = "openet-core" },
+    { name = "openet-refet-gee" },
     { name = "python-dateutil" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/95/b3/7387dcd6b542a63c540cd9ad63cbb38dd20bed39c6777995f565e1e9f66b/openet_ptjpl-0.4.1.tar.gz", hash = "sha256:0a6a7a9865f1e223df615b0159e6080978c5de8f4fbf5727f81b22fccff1d7f8", size = 68641, upload-time = "2024-12-16T16:28:11.162Z" }
+
+[package.metadata]
+requires-dist = [
+    { name = "earthengine-api", specifier = ">=1.5.2" },
+    { name = "openet-core", specifier = ">=0.7.0" },
+    { name = "openet-refet-gee", specifier = ">=0.7.1" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "python-dateutil" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "openet-refet-gee"
@@ -2445,6 +2455,7 @@ dev = [
     { name = "ipykernel" },
     { name = "kaleido" },
     { name = "nbconvert" },
+    { name = "openet-ptjpl" },
 ]
 
 [package.metadata]
@@ -2461,7 +2472,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "openet-disalexi", marker = "extra == 'openet'" },
     { name = "openet-geesebal", marker = "extra == 'openet'" },
-    { name = "openet-ptjpl", marker = "extra == 'openet'" },
+    { name = "openet-ptjpl", marker = "extra == 'openet'", editable = "../openet-ptjpl" },
     { name = "openet-refet-gee", marker = "extra == 'openet'" },
     { name = "openet-sims", marker = "extra == 'openet'" },
     { name = "openet-ssebop", marker = "extra == 'openet'" },
@@ -2494,6 +2505,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "kaleido", specifier = ">=1.2.0" },
     { name = "nbconvert", specifier = ">=7.17.0" },
+    { name = "openet-ptjpl", editable = "../openet-ptjpl" },
 ]
 
 [[package]]

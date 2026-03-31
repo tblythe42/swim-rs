@@ -74,6 +74,7 @@ def ingest_remote_sensing(
     cfg: ProjectConfig,
     sites: list = None,
     add_sentinel: bool = True,
+    etf_scale_factor: float = 1.0,
 ):
     """Ingest NDVI and ETf into the container.
 
@@ -116,7 +117,8 @@ def ingest_remote_sensing(
     # Landsat ETf
     landsat_etf_dir = os.path.join(cfg.landsat_dir, "extracts", f"{etf_model}_etf", "no_mask")
     if os.path.isdir(landsat_etf_dir):
-        print(f"Ingesting Landsat {etf_model} ETf (no_mask)...")
+        scale_msg = f" (scale_factor={etf_scale_factor})" if etf_scale_factor != 1.0 else ""
+        print(f"Ingesting Landsat {etf_model} ETf (no_mask){scale_msg}...")
         container.ingest.etf(
             source_dir=landsat_etf_dir,
             uid_column=cfg.feature_id_col,
@@ -124,6 +126,7 @@ def ingest_remote_sensing(
             instrument="landsat",
             mask="no_mask",
             fields=sites,
+            scale_factor=etf_scale_factor,
         )
     else:
         print(f"  WARNING: Landsat ETf directory not found: {landsat_etf_dir}")
@@ -206,6 +209,7 @@ def prep_all(
     sites: list = None,
     overwrite: bool = False,
     add_sentinel: bool = True,
+    etf_scale_factor: float = 1.0,
 ):
     """Run the complete data preparation workflow.
 
@@ -223,7 +227,13 @@ def prep_all(
     ingest_meteorology(container, cfg)
 
     # Step 2: Ingest remote sensing (NDVI, ETf)
-    ingest_remote_sensing(container, cfg, sites=sites, add_sentinel=add_sentinel)
+    ingest_remote_sensing(
+        container,
+        cfg,
+        sites=sites,
+        add_sentinel=add_sentinel,
+        etf_scale_factor=etf_scale_factor,
+    )
 
     # Step 3: Ingest properties
     ingest_properties(container, cfg)
@@ -264,6 +274,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip Sentinel NDVI ingestion",
     )
+    parser.add_argument(
+        "--etf-scale-factor",
+        type=float,
+        default=1.0,
+        help="Multiply ETf values by this factor during ingestion (default: 1.0)",
+    )
     args = parser.parse_args()
 
     select_sites = None
@@ -298,6 +314,7 @@ if __name__ == "__main__":
         sites=select_sites,
         overwrite=args.overwrite,
         add_sentinel=not args.skip_sentinel,
+        etf_scale_factor=args.etf_scale_factor,
     )
 
     container.close()
