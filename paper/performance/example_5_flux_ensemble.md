@@ -1,8 +1,16 @@
 # Example 5: Flux Ensemble — Performance Summary
 
+**Status:** PRE-FAIRNESS-FIX. The evaluator now enforces paired metrics
+(SWIM and each comparator scored on identical days/months per site) and
+excludes MB_Pch. The numbers below predate this change and will be replaced
+after re-evaluation.
+
 **Run:** Run 11 (reference calibration)
 **Run date:** 2026-02-19 (calibration + evaluation)
 **Evaluation files:** `/data/ssd1/swim/5_Flux_Ensemble/results/evaluation_metrics.csv` (Feb 19)
+**Note:** These CSV files were generated before the paired-evaluation and
+exclusion-policy changes. They do not yet reflect strict pairing or MB_Pch
+removal.
 
 ## Run Configuration
 

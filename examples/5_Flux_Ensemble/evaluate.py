@@ -28,6 +28,20 @@ from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
 OPEN_SOURCE_MODELS = ["geesebal", "ptjpl", "ssebop", "sims", "eemetric", "disalexi"]
+
+EXCLUDED_SITES = {"MB_Pch"}
+
+
+def apply_exclusions(fids):
+    """Filter site list through the canonical exclusion policy."""
+    before = len(fids)
+    fids = [f for f in fids if f not in EXCLUDED_SITES]
+    if before != len(fids):
+        dropped = before - len(fids)
+        print(f"Exclusion policy: dropped {dropped} site(s) {EXCLUDED_SITES}")
+    return fids
+
+
 VOLK_COLUMN_MAP = {
     "GEESEBAL_3x3": "geesebal",
     "PTJPL_3x3": "ptjpl",
@@ -223,6 +237,7 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
 
     Returns DataFrame with per-field metrics for SWIM and each OpenET model.
     """
+    fids = apply_exclusions(fids)
     print(f"Evaluating {len(fids)} fields from {par_csv} (openet_source={openet_source})")
 
     # Load irrigation data from container
@@ -264,88 +279,74 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
             continue
 
         obs = flux_et.loc[common].values
+        swim_vals = swim_et.loc[common].values
 
-        # SWIM metrics
-        row = {"fid": fid}
-        m = calc_metrics(obs, swim_et.loc[common].values)
-        row["n"] = m["n"]
-        for k in ["r2", "r", "rmse", "bias"]:
-            row[f"{k}_swim"] = m[k]
-
-        # Per-model OpenET metrics
+        # Load all OpenET model daily ET on common dates
         if openet_source == "diy":
-            # DIY returns daily ET (already interpolated ETf × ETo)
             et_daily_by_model = _get_diy_openet(container, fid, irr_data, etref)
         else:
-            # Volk returns sparse ET on Landsat dates; interpolate to daily
             et_sparse_by_model = _get_volk_openet(fid, openet_daily_dir)
             et_daily_by_model = {}
             for mn, s in et_sparse_by_model.items():
                 et_daily_by_model[mn] = s.interpolate(method="linear")
 
-        model_et_on_common = {}
+        # Ensemble ET on common dates
+        ens_vals = np.full(len(common), np.nan)
+        if "ensemble" in et_daily_by_model:
+            ens_vals = et_daily_by_model["ensemble"].reindex(common).values
+        else:
+            ensemble_source = getattr(cfg, "ensemble_source", "computed")
+            if ensemble_source == "openet":
+                ens_path = "remote_sensing/etf/landsat/ensemble/no_mask"
+                try:
+                    ens_df = container.query.dataframe(ens_path, fields=[fid])
+                    if fid in ens_df.columns and ens_df[fid].notna().any():
+                        ens_et_daily = ens_df[fid].interpolate(method="linear") * etref
+                        ens_vals = ens_et_daily.reindex(common).values
+                except KeyError:
+                    pass
+
+        # Paired mask: flux, swim, and ensemble all finite on the same day
+        paired_mask = np.isfinite(obs) & np.isfinite(swim_vals) & np.isfinite(ens_vals)
+        n_paired = int(paired_mask.sum())
+
+        row = {"fid": fid, "n": n_paired}
+
+        if n_paired >= 10:
+            m = calc_metrics(obs[paired_mask], swim_vals[paired_mask])
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_swim"] = m[k]
+
+            m = calc_metrics(obs[paired_mask], ens_vals[paired_mask])
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_ensemble"] = m[k]
+        else:
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_swim"] = np.nan
+                row[f"{k}_ensemble"] = np.nan
+
+        # Per-model OpenET metrics (each paired with flux+swim on shared days)
         for model_name in OPEN_SOURCE_MODELS:
             if model_name not in et_daily_by_model:
                 for k in ["r2", "r", "rmse", "bias"]:
                     row[f"{k}_{model_name}"] = np.nan
                 continue
 
-            et_daily = et_daily_by_model[model_name]
-            et_on_common = et_daily.reindex(common)
-
-            valid = np.isfinite(et_on_common.values) & np.isfinite(obs)
-            if valid.sum() >= 10:
-                model_et_on_common[model_name] = et_on_common.values
-                m = calc_metrics(obs, et_on_common.values)
+            model_vals = et_daily_by_model[model_name].reindex(common).values
+            model_paired = paired_mask & np.isfinite(model_vals)
+            if model_paired.sum() >= 10:
+                m = calc_metrics(obs[model_paired], model_vals[model_paired])
             else:
                 m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
 
             for k in ["r2", "r", "rmse", "bias"]:
                 row[f"{k}_{model_name}"] = m[k]
 
-        # Ensemble: use Volk pre-computed if available, else container, else nanmean
-        if "ensemble" in et_daily_by_model:
-            # Volk pre-computed ensemble_mean_3x3 (already interpolated above)
-            ens_on_common = et_daily_by_model["ensemble"].reindex(common)
-            valid = np.isfinite(ens_on_common.values) & np.isfinite(obs)
-            if valid.sum() >= 10:
-                m = calc_metrics(obs, ens_on_common.values)
-            else:
-                m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
-        else:
-            ensemble_source = getattr(cfg, "ensemble_source", "computed")
-            if ensemble_source == "openet":
-                ens_etf = None
-                ens_path = "remote_sensing/etf/landsat/ensemble/no_mask"
-                try:
-                    ens_df = container.query.dataframe(ens_path, fields=[fid])
-                    if fid in ens_df.columns and ens_df[fid].notna().any():
-                        ens_etf = ens_df[fid]
-                except KeyError:
-                    pass
-                if ens_etf is not None:
-                    ens_et_daily = ens_etf.interpolate(method="linear") * etref
-                    ens_on_common = ens_et_daily.reindex(common)
-                    m = calc_metrics(obs, ens_on_common.values)
-                else:
-                    m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
-            elif model_et_on_common:
-                stack = np.column_stack(list(model_et_on_common.values()))
-                ensemble_et = np.nanmean(stack, axis=1)
-                m = calc_metrics(obs, ensemble_et)
-            else:
-                m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
-
-        for k in ["r2", "r", "rmse", "bias"]:
-            row[f"{k}_ensemble"] = m[k]
-
         rows.append(row)
 
-        print(
-            f"  {fid}: n={row['n']:>5d}  "
-            f"R2_swim={row['r2_swim']:.3f}  R2_ens={row['r2_ensemble']:.3f}  "
-            f"RMSE_swim={row['rmse_swim']:.3f}  RMSE_ens={row['rmse_ensemble']:.3f}"
-        )
+        r2s = row.get("r2_swim", np.nan)
+        r2e = row.get("r2_ensemble", np.nan)
+        print(f"  {fid}: n_paired={n_paired:>5d}  R2_swim={r2s:.3f}  R2_ens={r2e:.3f}")
 
     if not rows:
         print("No fields with sufficient data for evaluation.")
@@ -359,7 +360,7 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
     common_df = metrics_df.loc[has_both]
 
     print("\n" + "=" * 80)
-    print(f"AGGREGATE ({len(common_df)} fields with both SWIM and ensemble estimates)")
+    print(f"PAIRED AGGREGATE ({len(common_df)} fields, SWIM+ensemble on identical days)")
     print("=" * 80)
     header = f"{'model':<12}"
     for stat in ["r2", "r", "rmse", "bias"]:
@@ -390,6 +391,7 @@ def evaluate_etf(cfg, container, par_csv, fids):
 
     Returns DataFrame with per-field, per-model ETf metrics.
     """
+    fids = apply_exclusions(fids)
     print(f"ETf evaluation: {len(fids)} fields from {par_csv}")
 
     calibrated_params = parse_pest_params(par_csv, fids)
@@ -498,7 +500,12 @@ def load_volk_monthly_et(fid, monthly_dir):
 
 
 def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
-    """Monthly ET comparison: SWIM vs flux vs Volk 3x3 monthly totals."""
+    """Monthly ET comparison with strictly paired months.
+
+    SWIM and each OpenET model are scored on the exact same months per site.
+    The ensemble defines the paired month index — all models share it.
+    """
+    fids = apply_exclusions(fids)
     monthly_dir = os.path.join(cfg.data_dir, "openet_flux", "monthly_data")
     print(f"Monthly evaluation: {len(fids)} fields from {par_csv}")
 
@@ -535,31 +542,45 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
         swim_monthly = swim_monthly.loc[swim_monthly.index.isin(valid_months)]
         flux_monthly = flux_monthly.loc[flux_monthly.index.isin(valid_months)]
 
-        common = swim_monthly.index.intersection(flux_monthly.index)
-        if len(common) < 6:
-            print(f"  {fid}: only {len(common)} months, skipping")
+        # Load Volk monthly ensemble to define the paired month index
+        volk_monthly = load_volk_monthly_et(fid, monthly_dir)
+        ens_monthly = volk_monthly.get("ensemble")
+
+        if ens_monthly is not None:
+            # Paired months: flux, swim, AND ensemble all finite
+            all_idx = flux_monthly.index
+            ens_on_idx = ens_monthly.reindex(all_idx)
+            paired_mask = (
+                flux_monthly.notna() & swim_monthly.reindex(all_idx).notna() & ens_on_idx.notna()
+            )
+            paired_months = all_idx[paired_mask]
+        else:
+            # No ensemble data — use flux ∩ swim months
+            paired_months = swim_monthly.index.intersection(flux_monthly.index)
+
+        n_paired = len(paired_months)
+        if n_paired < 6:
+            print(f"  {fid}: only {n_paired} paired months, skipping")
             continue
 
-        obs = flux_monthly.loc[common].values
+        obs = flux_monthly.loc[paired_months].values
 
-        row = {"fid": fid}
-        m = calc_metrics(obs, swim_monthly.loc[common].values)
-        row["n"] = m["n"]
+        row = {"fid": fid, "n": n_paired}
+        m = calc_metrics(obs, swim_monthly.reindex(paired_months).values)
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_swim"] = m[k]
 
-        # Volk monthly
-        volk_monthly = load_volk_monthly_et(fid, monthly_dir)
+        # Score each model on the same paired months
         for model_name in all_models:
             if model_name not in volk_monthly:
                 for k in ["r2", "r", "rmse", "bias"]:
                     row[f"{k}_{model_name}"] = np.nan
                 continue
 
-            volk_on_common = volk_monthly[model_name].reindex(common)
-            valid = np.isfinite(volk_on_common.values) & np.isfinite(obs)
-            if valid.sum() >= 6:
-                m = calc_metrics(obs, volk_on_common.values)
+            model_vals = volk_monthly[model_name].reindex(paired_months).values
+            model_valid = np.isfinite(model_vals) & np.isfinite(obs)
+            if model_valid.sum() >= 6:
+                m = calc_metrics(obs[model_valid], model_vals[model_valid])
             else:
                 m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
 
@@ -567,11 +588,9 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
                 row[f"{k}_{model_name}"] = m[k]
 
         rows.append(row)
-        print(
-            f"  {fid}: n={row['n']:>3d} mo  "
-            f"R2_swim={row['r2_swim']:.3f}  R2_ens={row['r2_ensemble']:.3f}  "
-            f"RMSE_swim={row['rmse_swim']:.1f}  RMSE_ens={row['rmse_ensemble']:.1f}"
-        )
+        r2s = row.get("r2_swim", np.nan)
+        r2e = row.get("r2_ensemble", np.nan)
+        print(f"  {fid}: n_paired={n_paired:>3d} mo  R2_swim={r2s:.3f}  R2_ens={r2e:.3f}")
 
     if not rows:
         print("No fields with sufficient data.")
@@ -584,7 +603,7 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
     common_df = metrics_df.loc[has_both]
 
     print("\n" + "=" * 80)
-    print(f"MONTHLY AGGREGATE ({len(common_df)} fields with both SWIM and ensemble)")
+    print(f"PAIRED MONTHLY AGGREGATE ({len(common_df)} fields, identical months)")
     print("=" * 80)
     header = f"{'model':<12}  {'r2_mean':>10}  {'r2_med':>10}  {'r_mean':>10}  {'r_med':>10}  {'rmse_mean':>10}  {'rmse_med':>10}  {'bias_mean':>10}  {'bias_med':>10}"
     print(header)
@@ -673,6 +692,7 @@ if __name__ == "__main__":
         fids = [s.strip() for s in args.sites.split(",")]
     else:
         fids = container.field_uids
+    fids = apply_exclusions(fids)
 
     try:
         if args.monthly:

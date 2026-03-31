@@ -217,14 +217,19 @@ def annual_median_bias_all_sites(swim_out, fids):
             if valid.sum() < 200:
                 continue
 
-            swim_yearly_bias.append(sv[valid].sum() - fv[valid].sum())
-
-            # Only use ensemble for years within the Volk data range
-            if len(ens_et) > 0 and ens_min_year <= yr <= ens_max_year:
+            # Only compute bias on days where all three are finite (paired)
+            if len(ens_et) > 0 and ens_min_year is not None and ens_min_year <= yr <= ens_max_year:
                 ev = ens_et.reindex(common_dates).values[valid]
-                emask = np.isfinite(ev)
-                if emask.sum() > 200:
-                    ens_yearly_bias.append(ev[emask].sum() - fv[valid][emask].sum())
+                paired = valid & np.isfinite(ens_et.reindex(common_dates).values)
+                if paired.sum() > 200:
+                    swim_yearly_bias.append(sv[paired].sum() - fv[paired].sum())
+                    ens_yearly_bias.append(
+                        ens_et.reindex(common_dates).values[paired].sum() - fv[paired].sum()
+                    )
+                elif valid.sum() > 200:
+                    swim_yearly_bias.append(sv[valid].sum() - fv[valid].sum())
+            elif valid.sum() > 200:
+                swim_yearly_bias.append(sv[valid].sum() - fv[valid].sum())
 
         if swim_yearly_bias:
             records.append(
@@ -265,19 +270,25 @@ def plot_cumulative(axes, swim_out):
 
         # Compute cumulative on common valid dates
         if len(f) > 0:
-            common = f.index.intersection(s.index)
-            # Fill NaN in flux with 0 for cumulative (conservative)
-            f_aligned = f.reindex(s.index).fillna(0)
-            s_cum = s.cumsum()
-            f_cum = f_aligned.cumsum()
+            # Cumulate only on days where all plotted series are finite (no zero-fill)
+            f_aligned = f.reindex(s.index)
+            if len(e) > 0:
+                e_aligned = e.reindex(s.index)
+                paired = f_aligned.notna() & s.notna() & e_aligned.notna()
+            else:
+                e_aligned = pd.Series(dtype=float)
+                paired = f_aligned.notna() & s.notna()
+
+            s_cum = s.where(paired).fillna(0).cumsum()
+            f_cum = f_aligned.where(paired).fillna(0).cumsum()
 
             ax.plot(s_cum.index, s_cum.values, color=SWIM_COLOR, lw=1.8, label="SWIM")
             ax.plot(
                 f_cum.index, f_cum.values, color=FLUX_COLOR, lw=1.2, ls="--", label="Flux Tower"
             )
 
-            if len(e) > 0:
-                e_cum = e.reindex(s.index).fillna(0).cumsum()
+            if len(e_aligned) > 0 and paired.any():
+                e_cum = e_aligned.where(paired).fillna(0).cumsum()
                 ax.plot(e_cum.index, e_cum.values, color=ENS_COLOR, lw=1.5, label="Ensemble")
 
             # Annotate final totals

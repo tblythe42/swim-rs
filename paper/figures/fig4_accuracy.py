@@ -173,15 +173,18 @@ def collect_daily_pairs(swim_out, fids):
             e_val = ens_daily.get(dt, np.nan) if len(ens_daily) > 0 else np.nan
             records.append({"fid": fid, "date": dt, "flux": f[i], "swim": s[i], "ensemble": e_val})
 
-        # Per-site metrics
-        fv, sv = f[valid], s[valid]
-        swim_r2 = r2_score(fv, sv) if len(fv) >= 10 else np.nan
-
+        # Per-site metrics — strictly paired: flux, swim, AND ensemble all finite
         if len(ens_daily) > 0:
-            ev = ens_daily.reindex(common).values[valid]
-            emask = np.isfinite(ev)
-            ens_r2 = r2_score(fv[emask], ev[emask]) if emask.sum() >= 10 else np.nan
+            ev = ens_daily.reindex(common).values
+            paired = valid & np.isfinite(ev)
+            if paired.sum() >= 10:
+                swim_r2 = r2_score(f[paired], s[paired])
+                ens_r2 = r2_score(f[paired], ev[paired])
+            else:
+                swim_r2 = np.nan
+                ens_r2 = np.nan
         else:
+            swim_r2 = r2_score(f[valid], s[valid]) if valid.sum() >= 10 else np.nan
             ens_r2 = np.nan
 
         site_metrics.append({"fid": fid, "swim_r2": swim_r2, "ens_r2": ens_r2})
