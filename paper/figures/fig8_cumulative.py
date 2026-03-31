@@ -217,19 +217,15 @@ def annual_median_bias_all_sites(swim_out, fids):
             if valid.sum() < 200:
                 continue
 
-            # Only compute bias on days where all three are finite (paired)
+            # Strictly paired: only include years where flux, swim, AND ensemble
+            # are all finite on the same days. No unpaired fallback.
             if len(ens_et) > 0 and ens_min_year is not None and ens_min_year <= yr <= ens_max_year:
-                ev = ens_et.reindex(common_dates).values[valid]
                 paired = valid & np.isfinite(ens_et.reindex(common_dates).values)
                 if paired.sum() > 200:
                     swim_yearly_bias.append(sv[paired].sum() - fv[paired].sum())
                     ens_yearly_bias.append(
                         ens_et.reindex(common_dates).values[paired].sum() - fv[paired].sum()
                     )
-                elif valid.sum() > 200:
-                    swim_yearly_bias.append(sv[valid].sum() - fv[valid].sum())
-            elif valid.sum() > 200:
-                swim_yearly_bias.append(sv[valid].sum() - fv[valid].sum())
 
         if swim_yearly_bias:
             records.append(
@@ -287,7 +283,10 @@ def plot_cumulative(axes, swim_out):
                 f_cum.index, f_cum.values, color=FLUX_COLOR, lw=1.2, ls="--", label="Flux Tower"
             )
 
-            if len(e_aligned) > 0 and paired.any():
+            has_ensemble = (
+                len(e_aligned) > 0 and paired.any() and e_aligned.loc[paired].notna().any()
+            )
+            if has_ensemble:
                 e_cum = e_aligned.where(paired).fillna(0).cumsum()
                 ax.plot(e_cum.index, e_cum.values, color=ENS_COLOR, lw=1.5, label="Ensemble")
 
@@ -313,7 +312,7 @@ def plot_cumulative(axes, swim_out):
                 ha="right",
                 color=FLUX_COLOR,
             )
-            if len(e) > 0:
+            if has_ensemble:
                 ens_total = e_cum.iloc[-1]
                 ax.text(
                     0.97,

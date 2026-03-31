@@ -288,7 +288,14 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
             et_sparse_by_model = _get_volk_openet(fid, openet_daily_dir)
             et_daily_by_model = {}
             for mn, s in et_sparse_by_model.items():
-                et_daily_by_model[mn] = s.interpolate(method="linear")
+                # Reindex to daily within the Volk data range, then interpolate
+                if s.notna().any():
+                    daily_idx = pd.date_range(
+                        s.dropna().index.min(), s.dropna().index.max(), freq="D"
+                    )
+                    et_daily_by_model[mn] = s.reindex(daily_idx).interpolate(method="linear")
+                else:
+                    et_daily_by_model[mn] = s
 
         # Ensemble ET on common dates
         ens_vals = np.full(len(common), np.nan)
@@ -305,6 +312,16 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
                         ens_vals = ens_et_daily.reindex(common).values
                 except KeyError:
                     pass
+            else:
+                # Computed ensemble: nanmean across available DIY models
+                model_arrays = []
+                for mn in OPEN_SOURCE_MODELS:
+                    if mn in et_daily_by_model:
+                        arr = et_daily_by_model[mn].reindex(common).values
+                        model_arrays.append(arr)
+                if model_arrays:
+                    stack = np.column_stack(model_arrays)
+                    ens_vals = np.nanmean(stack, axis=1)
 
         # Paired mask: flux, swim, and ensemble all finite on the same day
         paired_mask = np.isfinite(obs) & np.isfinite(swim_vals) & np.isfinite(ens_vals)
@@ -325,19 +342,25 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, openet_source="diy"):
                 row[f"{k}_swim"] = np.nan
                 row[f"{k}_ensemble"] = np.nan
 
-        # Per-model OpenET metrics (each paired with flux+swim on shared days)
+        # Per-model OpenET metrics: each model paired with flux+swim+model on same days.
+        # SWIM is re-scored per model so swim-vs-ptjpl uses the same days as ptjpl-vs-flux.
         for model_name in OPEN_SOURCE_MODELS:
             if model_name not in et_daily_by_model:
                 for k in ["r2", "r", "rmse", "bias"]:
                     row[f"{k}_{model_name}"] = np.nan
+                    row[f"r2_swim_vs_{model_name}"] = np.nan
                 continue
 
             model_vals = et_daily_by_model[model_name].reindex(common).values
-            model_paired = paired_mask & np.isfinite(model_vals)
+            model_paired = np.isfinite(obs) & np.isfinite(swim_vals) & np.isfinite(model_vals)
             if model_paired.sum() >= 10:
                 m = calc_metrics(obs[model_paired], model_vals[model_paired])
+                row[f"r2_swim_vs_{model_name}"] = r2_score(
+                    obs[model_paired], swim_vals[model_paired]
+                )
             else:
                 m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+                row[f"r2_swim_vs_{model_name}"] = np.nan
 
             for k in ["r2", "r", "rmse", "bias"]:
                 row[f"{k}_{model_name}"] = m[k]
@@ -570,7 +593,8 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_swim"] = m[k]
 
-        # Score each model on the same paired months
+        # Score each model — per-model paired months (flux + swim + model all finite)
+        swim_on_paired = swim_monthly.reindex(paired_months).values
         for model_name in all_models:
             if model_name not in volk_monthly:
                 for k in ["r2", "r", "rmse", "bias"]:
@@ -578,7 +602,7 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
                 continue
 
             model_vals = volk_monthly[model_name].reindex(paired_months).values
-            model_valid = np.isfinite(model_vals) & np.isfinite(obs)
+            model_valid = np.isfinite(model_vals) & np.isfinite(obs) & np.isfinite(swim_on_paired)
             if model_valid.sum() >= 6:
                 m = calc_metrics(obs[model_valid], model_vals[model_valid])
             else:
