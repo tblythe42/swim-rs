@@ -144,23 +144,65 @@ def load_flux_et(fid):
 
 
 def load_ssebop_et(container, fid, etref):
-    """Load SSEBop ETf using mask-switched logic matching the Ex4 evaluator.
+    """Load SSEBop ETf using year-by-year mask switching matching the Ex4 evaluator.
 
-    Default to inv_irr; no irr-year switching here (would require irrigation
-    data). This matches the evaluator's dominant path for non-irrigated sites
-    and is a conservative choice for irrigated sites.
+    Default to inv_irr; switch to irr for years where irrigation fraction >= 0.3.
+    This replicates the logic in evaluate.py:load_ssebop_etf().
     """
+    import json
+
+    irr_threshold = 0.3
+
+    # Determine irrigated years from container dynamics
+    irr_years = set()
+    try:
+        gwsub_path = "derived/dynamics/irr_data"
+        irr_arr = container._root[gwsub_path]
+        uids = container._root["geometry/uid"][:]
+        idx = list(uids).index(fid) if fid in uids else -1
+        if idx >= 0:
+            raw = irr_arr[idx]
+            if hasattr(raw, "item"):
+                raw = raw.item()
+            if raw:
+                irr_data = json.loads(raw)
+                for k, v in irr_data.items():
+                    if k == "fallow_years":
+                        continue
+                    if isinstance(v, dict) and v.get("f_irr", 0.0) >= irr_threshold:
+                        irr_years.add(int(k))
+    except Exception:
+        pass
+
+    # Load both masks
+    etf_inv = etf_irr = None
     for mask in ["inv_irr", "irr"]:
         etf_path = f"remote_sensing/etf/landsat/ssebop/{mask}"
         try:
             etf_df = container.query.dataframe(etf_path, fields=[fid])
             if fid in etf_df.columns and etf_df[fid].notna().any():
-                etf = etf_df[fid].dropna()
-                etf_daily = etf.reindex(etref.index).interpolate(method="linear")
-                return (etf_daily * etref).clip(lower=0)
+                if mask == "inv_irr":
+                    etf_inv = etf_df[fid]
+                else:
+                    etf_irr = etf_df[fid]
         except Exception:
-            continue
-    return pd.Series(dtype=float)
+            pass
+
+    if etf_inv is None and etf_irr is None:
+        return pd.Series(dtype=float)
+
+    # Composite: inv_irr default, irr for irrigated years
+    combined = (
+        etf_inv.copy() if etf_inv is not None else pd.Series(float("nan"), index=etf_irr.index)
+    )
+    if etf_irr is not None and irr_years:
+        irr_mask = combined.index.year.isin(irr_years)
+        combined.loc[irr_mask] = etf_irr.loc[irr_mask]
+    if etf_inv is None and etf_irr is not None:
+        combined = etf_irr.copy()
+
+    etf_daily = combined.reindex(etref.index).interpolate(method="linear")
+    return (etf_daily * etref).clip(lower=0)
 
 
 def main():
