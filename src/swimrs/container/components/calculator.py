@@ -352,7 +352,7 @@ class Calculator(Component):
             if use_mask:
                 irr_props = self._get_yearly_irrigation_properties()
 
-            # Compute irrigation windows
+            # Compute irrigation windows (gwsub_data enables LULC-aware fallback)
             irr_data = self._compute_irrigation_data(
                 ds,
                 irr_threshold,
@@ -362,6 +362,7 @@ class Calculator(Component):
                 use_mask,
                 use_lulc,
                 irr_props,
+                gwsub_data,
             )
 
             # Write results
@@ -841,33 +842,40 @@ class Calculator(Component):
         """
         Compute groundwater subsidy for each field and year.
 
-        Subsidy is detected when ET > precipitation (ratio > 1).
+        Subsidy is detected when interpolated RS-derived ET > precipitation (ratio > 1).
         f_sub = (ratio - 1) / ratio
 
-        Matches original SamplePlotDynamics._analyze_field_groundwater_subsidy().
+        ETf is interpolated to daily before annual summation so that the
+        ET/PPT ratio reflects the full year, not just Landsat capture dates.
         """
-        eta = ds["etf"] * ds["eto"]
-        ppt = ds["prcp"]
         etf = ds["etf"]
+        eto = ds["eto"]
+        ppt = ds["prcp"]
 
         results = {}
         all_years = sorted(pd.DatetimeIndex(ds.coords["time"].values).year.unique())
-        time_index = pd.DatetimeIndex(ds.coords["time"].values)
 
         for site in ds.coords["site"].values:
             site_str = str(site)
             site_data = {}
 
             # Extract site data once as pandas Series (fast)
-            site_eta_s = eta.sel(site=site).to_pandas()
-            site_ppt_s = ppt.sel(site=site).to_pandas()
             site_etf_s = etf.sel(site=site).to_pandas()
+            site_eto_s = eto.sel(site=site).to_pandas()
+            site_ppt_s = ppt.sel(site=site).to_pandas()
+
+            # Interpolate ETf to daily before computing ET (matches irrigation path)
+            etf_interp = site_etf_s.interpolate()
+            etf_interp = etf_interp.bfill().ffill()
+            site_eta_s = etf_interp * site_eto_s
+
+            # Raw ETf sum to detect years with valid captures
+            raw_etf_yearly = site_etf_s.groupby(site_etf_s.index.year).sum()
 
             # Pre-compute yearly sums using pandas groupby (vectorized)
             years_idx = site_eta_s.index.year
             eta_yearly = site_eta_s.groupby(years_idx).sum()
             ppt_yearly = site_ppt_s.groupby(years_idx).sum()
-            etf_yearly = site_etf_s.groupby(years_idx).sum()
 
             # Pre-compute monthly sums for subsidy month detection
             monthly_idx = site_eta_s.index.to_period("M")
@@ -879,8 +887,8 @@ class Calculator(Component):
             gw_count = 0
 
             for yr in all_years:
-                # Check if this year has valid ETf data (sum > 0)
-                etf_yr_sum = etf_yearly.get(yr, 0)
+                # Check if this year has valid ETf captures (raw, not interpolated)
+                etf_yr_sum = raw_etf_yearly.get(yr, 0)
                 if etf_yr_sum <= 0:
                     continue
 
@@ -987,6 +995,7 @@ class Calculator(Component):
         use_mask: bool,
         use_lulc: bool,
         irr_props: dict[str, dict[str, float]] | None = None,
+        gwsub_data: dict[str, dict] | None = None,
     ) -> dict[str, dict]:
         """
         Compute irrigation windows for each field and year.
@@ -996,13 +1005,14 @@ class Calculator(Component):
         use_mask=True (CONUS):
             Reads f_irr from irr_props (per-year irrigation fraction from properties).
             Year is irrigated if f_irr > irr_threshold.
+            Fallback: if not irrigated by mask but gwsub_data shows ET > PPT
+            and LULC is cropland, override to irrigated (mask data missed it).
 
         use_lulc=True (International):
             Computes irrigation from water balance (ET/PPT ratio).
             Year is irrigated if subsidy_months >= 3 AND field is cropped.
 
         Uses NDVI slope analysis to detect irrigation periods.
-        Matches original SamplePlotDynamics behavior for exact parity.
         """
         ndvi = ds["ndvi"]
         etf = ds["etf"]
@@ -1013,8 +1023,10 @@ class Calculator(Component):
         years = sorted(pd.DatetimeIndex(ds.coords["time"].values).year.unique())
         time_index = pd.DatetimeIndex(ds.coords["time"].values)
 
-        # Get LULC data for cropped classification if use_lulc is True
-        lulc_by_site = self._get_lulc_by_site(ds.coords["site"].values) if use_lulc else {}
+        # LULC needed for both paths: use_lulc (original) and use_mask (fallback)
+        lulc_by_site = self._get_lulc_by_site(ds.coords["site"].values)
+        # MODIS cropland codes
+        cropland_codes = {12, 14}
 
         # Track years needing backfill (irrigated but no windows detected)
         backfill_tracker = {}
@@ -1057,6 +1069,16 @@ class Calculator(Component):
                     if pd.isna(f_irr):
                         f_irr = 0.0
                     irrigated = f_irr > irr_threshold
+
+                    # Fallback: mask missed irrigation at a cropland site where
+                    # RS-derived ET exceeds precipitation (gwsub detected subsidy).
+                    # For cropland the water source is irrigation, not groundwater.
+                    if not irrigated and gwsub_data:
+                        yr_gw = gwsub_data.get(site_str, {}).get(int(yr), {})
+                        lulc_code = lulc_by_site.get(site_str, -1)
+                        if yr_gw.get("subsidized", 0) and lulc_code in cropland_codes:
+                            irrigated = True
+                            f_irr = 1.0
 
                 elif use_lulc:
                     # International mode: compute from water balance using pre-computed monthly data
