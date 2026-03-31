@@ -6,12 +6,17 @@ paired-evaluation fairness fix. Wetland/riparian results will change after
 container rebuild + recalibration. All comparative metrics will change after
 re-evaluation with strict pairing.
 
-**Evaluation method:** Daily and monthly metrics are computed on strictly paired
-observation sets — both SWIM and SSEBop are scored on the exact same days/months
-per site. Sites in the exclusion list (MB_Pch) are omitted from all outputs.
+**Evaluation method (pending re-run):** The evaluator now computes daily and
+monthly metrics on strictly paired observation sets — both SWIM and SSEBop are
+scored on the exact same days/months per site. Sites in the exclusion list
+(MB_Pch) are omitted from all outputs. The numbers below predate this change
+and will be replaced after re-evaluation.
 
 **Run date:** 2026-02-21 (evaluation), 2026-02-20 (calibration)
 **Evaluation files:** `/data/ssd1/swim/4_Flux_Network/results/evaluation_metrics.csv` (Feb 21)
+**Note:** These CSV files were generated before the paired-evaluation and
+exclusion-policy changes. They do not yet reflect strict pairing or MB_Pch
+removal.
 
 ## Run Configuration
 

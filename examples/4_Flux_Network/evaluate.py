@@ -228,6 +228,7 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
 
     Returns DataFrame with per-field metrics for SWIM and SSEBop NHM.
     """
+    fids = apply_exclusions(fids)
     print(f"Evaluating {len(fids)} fields from {par_csv}")
 
     # Load irrigation data from container
@@ -364,6 +365,7 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
     max_interp missing flux days per month before summing. Both SWIM and SSEBop
     are scored on the exact same set of months per site (paired evaluation).
     """
+    fids = apply_exclusions(fids)
     print(f"Monthly evaluation: {len(fids)} fields from {par_csv}")
 
     if no_mask:
@@ -486,6 +488,7 @@ def evaluate_etf(cfg, container, par_csv, fids, no_mask=False):
 
     Returns DataFrame with per-field ETf metrics.
     """
+    fids = apply_exclusions(fids)
     print(f"ETf evaluation: {len(fids)} fields from {par_csv}")
 
     calibrated_params = parse_pest_params(par_csv, fids)

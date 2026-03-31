@@ -144,12 +144,13 @@ def load_flux_et(fid):
 
 
 def load_ssebop_et(container, fid, etref):
-    """Load SSEBop ETf from container using mask-switched logic, interpolate, multiply by ETo.
+    """Load SSEBop ETf using mask-switched logic matching the Ex4 evaluator.
 
-    Matches the evaluation comparator: inv_irr by default, irr for irrigated years.
-    Falls back to no_mask if neither mask is available.
+    Default to inv_irr; no irr-year switching here (would require irrigation
+    data). This matches the evaluator's dominant path for non-irrigated sites
+    and is a conservative choice for irrigated sites.
     """
-    for mask in ["inv_irr", "no_mask"]:
+    for mask in ["inv_irr", "irr"]:
         etf_path = f"remote_sensing/etf/landsat/ssebop/{mask}"
         try:
             etf_df = container.query.dataframe(etf_path, fields=[fid])
