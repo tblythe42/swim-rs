@@ -208,6 +208,8 @@ cython_debug/
 /examples/*.md
 /examples/*/*.md
 !/examples/*/README.md
+!/examples/5_Flux_Ensemble/VALIDATION_POLICY.md
+!/examples/5_Flux_Ensemble/RUN11_REFERENCE.md
 
 # Root project notes/plans
 /notes/

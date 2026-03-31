@@ -1,6 +1,8 @@
 # Example 5: Flux Ensemble Calibration
 
-Daily ET calibration for 59 US cropland flux tower sites using PEST++ IES against a 6-model OpenET Landsat ETf ensemble.
+Daily ET calibration for 60 US cropland flux tower sites using PEST++ IES
+against a 6-model OpenET Landsat ETf ensemble. For validation reporting,
+`MB_Pch` is excluded, leaving a 59-site evaluation candidate cohort.
 
 ## Approach
 
@@ -21,7 +23,7 @@ SWIM is calibrated via PEST++ IES (iterative ensemble smoother) against unmasked
 
 **1. Extract remote sensing data**
 ```bash
-python data_extract.py
+uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/data_extract.py
 ```
 
 **2. Sync EE exports to local storage**
@@ -31,34 +33,45 @@ gsutil -m rsync -r gs://{bucket}/5_Flux_Ensemble data/remote_sensing/
 
 **3. Build container**
 ```bash
-python container_prep.py --overwrite
+uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/container_prep.py --overwrite
 ```
 
 **4. Calibrate**
 ```bash
-python calibrate.py
+uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/calibrate.py
 ```
 
 **5. Evaluate**
 ```bash
-# Daily ET vs flux tower
-python evaluate.py
+# Canonical daily paired benchmark
+uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/evaluate.py --par-csv /data/ssd1/swim/5_Flux_Ensemble/results/run11_full_period/5_Flux_Ensemble.3.par.csv --container /data/ssd1/swim/5_Flux_Ensemble/data/5_Flux_Ensemble.swim --openet-source volk
+
+# Canonical monthly paired benchmark
+uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/evaluate.py --par-csv /data/ssd1/swim/5_Flux_Ensemble/results/run11_full_period/5_Flux_Ensemble.3.par.csv --container /data/ssd1/swim/5_Flux_Ensemble/data/5_Flux_Ensemble.swim --monthly
 
 # ETf comparison at Landsat capture dates
-python evaluate.py --etf
-
-# Monthly ET totals vs flux and Volk 3x3
-python evaluate.py --monthly
+uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/evaluate.py --par-csv /data/ssd1/swim/5_Flux_Ensemble/results/run11_full_period/5_Flux_Ensemble.3.par.csv --container /data/ssd1/swim/5_Flux_Ensemble/data/5_Flux_Ensemble.swim --etf
 ```
 
-## Results (Run 8)
+## Validation Policy
 
-| Metric | Daily | Monthly |
-|--------|-------|---------|
-| Mean bias (mm/d) | -0.001 | — |
-| R² (median) | 0.604 | 0.792 |
+Example 5 now uses one canonical validation policy documented in
+`VALIDATION_POLICY.md`.
 
-SWIM is the least biased model compared to the 6 OpenET models and their ensemble.
+- Headline ET benchmark: paired SWIM vs Volk 3x3 OpenET ensemble.
+- Calibration configuration: 60 sites.
+- Excluded from validation outputs: `MB_Pch`.
+- Evaluation candidate cohort: 59 sites.
+- Current paired cohorts from the March 31, 2026 rerun:
+  - Daily headline benchmark: 58 sites.
+  - Monthly headline benchmark: 33 sites.
+
+Current canonical paired snapshot:
+
+| Benchmark | SWIM R² mean | Ensemble R² mean | SWIM bias mean | Ensemble bias mean |
+|-----------|--------------|------------------|----------------|--------------------|
+| Daily | 0.392 | 0.323 | -0.151 mm/day | -0.099 mm/day |
+| Monthly | 0.814 | 0.799 | -0.774 mm/month | -5.877 mm/month |
 
 ## Files
 
@@ -72,4 +85,6 @@ SWIM is the least biased model compared to the 6 OpenET models and their ensembl
 | `container_prep.py` | Build `.swim` container (ingest + compute + export) |
 | `calibrate.py` | Run PEST++ IES calibration sequence |
 | `evaluate.py` | Evaluate calibrated model against flux and OpenET |
+| `VALIDATION_POLICY.md` | Canonical comparison policy and current benchmark snapshot |
+| `RUN11_REFERENCE.md` | Tracked Run 11 reference and paired benchmark summary |
 | `params.csv` | Sample per-site parameter file (regenerated at runtime) |
