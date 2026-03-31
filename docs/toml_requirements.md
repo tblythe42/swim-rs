@@ -114,3 +114,38 @@ forecast_parameters = "{pest_run_dir}/pest/archive/{project}.3.par.csv"  # optio
 - Met source: Fort Peck uses GridMET; ERA5-Land is supported by pointing `met` to the ERA5 directory and setting matching grid mapping if needed.
 - Calibration: The custom forward script can be omitted if using the packaged default; keep paths consistent under `pest_run_dir`.
 - EE auth: Needed only for fresh extracts. Shipped examples include data, so prep/calibrate/evaluate can run without EE. 
+
+## Disposable Run Container Sections
+
+Use these optional sections when generating disposable hindcast/forecast containers via `swim project`.
+
+```toml
+[hindcast]
+start_date = "1987-01-01"
+end_date = "2025-12-31"
+container = "{data}/{project}_hindcast.swim"
+met_source = "gridmet"
+ndvi_mode = "observed"
+
+[forecast]
+# Existing forecast_parameters key is still supported for evaluate workflows.
+# Additional keys below are used by swim project.
+forecast_parameters = "{pest_run_dir}/pest/archive/{project}.3.par.csv"
+start_date = "2026-01-01"
+end_date = "2100-12-31"
+container = "{data}/{project}_{scenario}.swim"
+met_source = "gridmet"
+met_dir = "{data}/met_timeseries/loca_vic/{scenario}"
+ndvi_mode = "climatology"
+scenarios = ["rcp45_cesm", "rcp85_cesm"]
+```
+
+### Key behavior
+
+- `hindcast.ndvi_mode="observed"` ingests period NDVI and recomputes merged NDVI.
+- `forecast.ndvi_mode="climatology"` uses source-container climatology tiled over forecast years.
+- `forecast.met_source` is currently `gridmet`-format only. LOCA-VIC adapter support is pending.
+
+### Health checks for run containers
+
+For `swim project`, health checks should validate `mask_mode` and `met_source`. Do not include `snow_source` in run-container health config.

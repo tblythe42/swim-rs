@@ -8,5 +8,6 @@
 
 - [Installation Guide](installation.md)
 - [Data Extraction Guide](data_extraction.md)
+- [Disposable Run Containers](run_containers.md)
 - [CLI Cheat Sheet](swim_cli_cheatsheet.md)
 - [GitHub Repository](https://github.com/dgketchum/swim-rs)

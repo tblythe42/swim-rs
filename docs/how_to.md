@@ -544,3 +544,46 @@ Each project uses a TOML with a small, consistent set of keys. These are the req
 - Read [Algorithm Description](algorithm_description.md) for model physics
 - See [Container Architecture](container_architecture.md) for data structure details
 - Check [CLI Cheatsheet](swim_cli_cheatsheet.md) for quick reference
+
+## Disposable Run Containers
+
+After calibration is complete, use the calibrated container as the authority and generate disposable run containers for hindcast and forecast periods.
+
+```bash
+# Hindcast container
+swim project my_project.toml --mode hindcast --overwrite
+
+# Forecast container (single scenario)
+swim project my_project.toml --mode forecast --scenario rcp85_cesm --overwrite
+
+# Forecast containers (all scenarios listed in TOML)
+swim project my_project.toml --mode forecast --overwrite
+```
+
+### Required TOML sections
+
+```toml
+[hindcast]
+start_date = "1987-01-01"
+end_date = "2025-12-31"
+container = "{data}/{project}_hindcast.swim"
+met_source = "gridmet"
+ndvi_mode = "observed"
+
+[forecast]
+start_date = "2026-01-01"
+end_date = "2100-12-31"
+container = "{data}/{project}_{scenario}.swim"
+met_source = "gridmet"
+met_dir = "{data}/met_timeseries/loca_vic/{scenario}"
+ndvi_mode = "climatology"
+scenarios = ["rcp45_cesm", "rcp85_cesm"]
+```
+
+### Operational notes
+
+- Run containers are disposable and should be regenerated, not manually patched.
+- `swim project` copies static calibrated content, ingests run-period forcing, recomputes NDVI products and irrigation windows, and runs health checks.
+- Run-container health checks intentionally omit `snow_source`; SWE observations are calibration-time data, while hindcast/forecast snow is handled internally by the model.
+
+See [Disposable Run Containers](run_containers.md) for the full data-flow contract and troubleshooting.

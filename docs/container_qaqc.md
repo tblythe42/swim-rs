@@ -396,3 +396,32 @@ flowchart TB
     Pass --> RunManifest
     Override --> RunManifest
 ```
+
+---
+
+## Run-Container QAQC Policy
+
+Disposable hindcast/forecast containers built with `swim project` follow a different health-policy contract from calibration containers.
+
+### Why this differs
+
+- Calibration containers commonly ingest observed SWE (`snow/{source}/swe`) for calibration workflows.
+- Run containers use the process model's internal snow dynamics with calibrated snow parameters; observed SWE arrays are intentionally omitted.
+
+### Recommended run-container health config
+
+For `swim project`, use a reduced health config:
+
+```python
+health_config = {
+    "mask_mode": config.mask_mode,
+    "met_source": met_source,
+}
+```
+
+Do **not** include `snow_source` for run-container health checks, or the policy will require `snow/{snow_source}/swe` and produce a false FAIL.
+
+### Practical gating
+
+- Keep `raise_on_fail=True` so real forcing/coverage issues still block run-container creation.
+- Restrict the evaluated keys to those relevant for disposable runs (`mask_mode`, `met_source`, and optional ETf keys if needed).
