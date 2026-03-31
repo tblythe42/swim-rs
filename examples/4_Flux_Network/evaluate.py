@@ -27,6 +27,23 @@ from swimrs.swim.config import ProjectConfig
 
 IRR_THRESHOLD = 0.3
 
+# Canonical exclusion list — sites with known data quality issues that should
+# not appear in any comparative evaluation. Keep this list general so new
+# exclusions can be added without ad hoc filters elsewhere.
+EXCLUDED_SITES = {"MB_Pch"}
+
+
+def apply_exclusions(fids):
+    """Filter site list through the canonical exclusion policy."""
+    before = len(fids)
+    fids = [f for f in fids if f not in EXCLUDED_SITES]
+    if before != len(fids):
+        dropped = before - len(fids)
+        print(
+            f"Exclusion policy: dropped {dropped} site(s) {EXCLUDED_SITES & set(fids) or EXCLUDED_SITES}"
+        )
+    return fids
+
 
 def load_config():
     project_dir = Path(__file__).resolve().parent
@@ -205,6 +222,10 @@ def calc_metrics(obs, mod):
 def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
     """Run calibrated model and evaluate against flux tower ET and SSEBop NHM.
 
+    Both SWIM and SSEBop are scored on the exact same set of days per site
+    (paired evaluation). Days where either model or flux is NaN are excluded
+    from both scores.
+
     Returns DataFrame with per-field metrics for SWIM and SSEBop NHM.
     """
     print(f"Evaluating {len(fids)} fields from {par_csv}")
@@ -245,15 +266,9 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
             continue
 
         obs = flux_et.loc[common].values
+        swim_vals = swim_et.loc[common].values
 
-        # SWIM metrics
-        row = {"fid": fid}
-        m = calc_metrics(obs, swim_et.loc[common].values)
-        row["n"] = m["n"]
-        for k in ["r2", "r", "rmse", "bias"]:
-            row[f"{k}_swim"] = m[k]
-
-        # SSEBop NHM metrics (interpolated ETf × ETo)
+        # SSEBop NHM ET (interpolated ETf × ETo)
         if no_mask:
             etf_series = load_ssebop_etf_no_mask(container, fid)
         else:
@@ -261,26 +276,34 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
         if etf_series is not None:
             etf_interp = etf_series.interpolate(method="linear")
             ssebop_et = etf_interp * etref
-            ssebop_on_common = ssebop_et.reindex(common)
-
-            valid = np.isfinite(ssebop_on_common.values) & np.isfinite(obs)
-            if valid.sum() >= 10:
-                m = calc_metrics(obs, ssebop_on_common.values)
-            else:
-                m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+            ssebop_vals = ssebop_et.reindex(common).values
         else:
-            m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
+            ssebop_vals = np.full(len(common), np.nan)
 
-        for k in ["r2", "r", "rmse", "bias"]:
-            row[f"{k}_ssebop"] = m[k]
+        # Paired mask: all three must be finite on the same day
+        paired_mask = np.isfinite(obs) & np.isfinite(swim_vals) & np.isfinite(ssebop_vals)
+        n_paired = int(paired_mask.sum())
+
+        row = {"fid": fid, "n": n_paired}
+
+        if n_paired >= 10:
+            m = calc_metrics(obs[paired_mask], swim_vals[paired_mask])
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_swim"] = m[k]
+
+            m = calc_metrics(obs[paired_mask], ssebop_vals[paired_mask])
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_ssebop"] = m[k]
+        else:
+            for k in ["r2", "r", "rmse", "bias"]:
+                row[f"{k}_swim"] = np.nan
+                row[f"{k}_ssebop"] = np.nan
 
         rows.append(row)
 
-        print(
-            f"  {fid}: n={row['n']:>5d}  "
-            f"R2_swim={row['r2_swim']:.3f}  R2_ssebop={row['r2_ssebop']:.3f}  "
-            f"RMSE_swim={row['rmse_swim']:.3f}  RMSE_ssebop={row['rmse_ssebop']:.3f}"
-        )
+        r2s = row.get("r2_swim", np.nan)
+        r2b = row.get("r2_ssebop", np.nan)
+        print(f"  {fid}: n_paired={n_paired:>5d}  R2_swim={r2s:.3f}  R2_ssebop={r2b:.3f}")
 
     if not rows:
         print("No fields with sufficient data for evaluation.")
@@ -288,12 +311,12 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
 
     metrics_df = pd.DataFrame(rows).set_index("fid")
 
-    # Aggregate summary
+    # Aggregate summary (only sites with finite paired metrics)
     has_both = metrics_df["r2_swim"].notna() & metrics_df["r2_ssebop"].notna()
     common_df = metrics_df.loc[has_both]
 
     print("\n" + "=" * 80)
-    print(f"AGGREGATE ({len(common_df)} fields with both SWIM and SSEBop estimates)")
+    print(f"PAIRED AGGREGATE ({len(common_df)} fields, both models on identical days)")
     print("=" * 80)
     header = f"{'model':<12}"
     for stat in ["r2", "r", "rmse", "bias"]:
@@ -335,10 +358,11 @@ def _interp_and_sum(grp, max_interp):
 
 
 def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_mask=False):
-    """Monthly aggregation of ET evaluation.
+    """Monthly aggregation of ET evaluation with strictly paired months.
 
     Resamples daily ET to monthly totals (mm/month), interpolating up to
-    max_interp missing flux days per month before summing.
+    max_interp missing flux days per month before summing. Both SWIM and SSEBop
+    are scored on the exact same set of months per site (paired evaluation).
     """
     print(f"Monthly evaluation: {len(fids)} fields from {par_csv}")
 
@@ -383,7 +407,7 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
         flux_monthly = _monthly_sum(flux_daily, max_interp)
         swim_monthly = swim_daily.resample("MS").sum()
 
-        # SSEBop monthly ET (sum) and ETf (mean)
+        # SSEBop monthly ET
         if no_mask:
             etf_series = load_ssebop_etf_no_mask(container, fid)
         else:
@@ -395,33 +419,33 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
         else:
             ssebop_monthly = pd.Series(np.nan, index=swim_monthly.index)
 
-        # Keep only months where flux is valid
-        valid_months = flux_monthly.dropna().index
-        common_months = valid_months.intersection(swim_monthly.index)
-        if len(common_months) < 6:
+        # Strictly paired months: all three (flux, swim, ssebop) must be finite
+        all_months = flux_monthly.index.union(swim_monthly.index).union(ssebop_monthly.index)
+        flux_vals = flux_monthly.reindex(all_months)
+        swim_vals = swim_monthly.reindex(all_months)
+        ssebop_vals = ssebop_monthly.reindex(all_months)
+
+        paired_mask = flux_vals.notna() & swim_vals.notna() & ssebop_vals.notna()
+        paired_months = all_months[paired_mask]
+        n_paired = len(paired_months)
+
+        if n_paired < 6:
             continue
 
-        obs = flux_monthly.loc[common_months].values
-        row = {"fid": fid}
+        obs = flux_vals.loc[paired_months].values
+        row = {"fid": fid, "n_months": n_paired}
 
-        m = calc_metrics(obs, swim_monthly.loc[common_months].values)
-        row["n_months"] = m["n"]
+        m = calc_metrics(obs, swim_vals.loc[paired_months].values)
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_swim"] = m[k]
 
-        ssebop_vals = ssebop_monthly.reindex(common_months).values
-        valid_ssebop = np.isfinite(ssebop_vals) & np.isfinite(obs)
-        if valid_ssebop.sum() >= 6:
-            m = calc_metrics(obs, ssebop_vals)
-        else:
-            m = {"r2": np.nan, "r": np.nan, "rmse": np.nan, "bias": np.nan}
-
+        m = calc_metrics(obs, ssebop_vals.loc[paired_months].values)
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_ssebop"] = m[k]
 
         rows.append(row)
         print(
-            f"  {fid}: n_months={row['n_months']:>4d}  "
+            f"  {fid}: n_months_paired={n_paired:>4d}  "
             f"R2_swim={row['r2_swim']:.3f}  R2_ssebop={row['r2_ssebop']:.3f}  "
             f"RMSE_swim={row['rmse_swim']:.2f}  RMSE_ssebop={row['rmse_ssebop']:.2f}"
         )
@@ -432,11 +456,8 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
 
     metrics_df = pd.DataFrame(rows).set_index("fid")
 
-    has_both = metrics_df["r2_swim"].notna() & metrics_df["r2_ssebop"].notna()
-    common_df = metrics_df.loc[has_both]
-
     print("\n" + "=" * 80)
-    print(f"MONTHLY AGGREGATE ({len(common_df)} fields with both SWIM and SSEBop)")
+    print(f"PAIRED MONTHLY AGGREGATE ({len(metrics_df)} fields, identical months)")
     print("=" * 80)
     header = f"{'model':<12}"
     for stat in ["r2", "r", "rmse", "bias"]:
@@ -448,8 +469,8 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
         line = f"{model_name:<12}"
         for stat in ["r2", "r", "rmse", "bias"]:
             col = f"{stat}_{model_name}"
-            if col in common_df.columns:
-                vals = common_df[col].dropna()
+            if col in metrics_df.columns:
+                vals = metrics_df[col].dropna()
                 line += f"  {vals.mean():>10.3f}  {vals.median():>10.3f}"
             else:
                 line += f"  {'n/a':>10}  {'n/a':>10}"
@@ -603,6 +624,7 @@ if __name__ == "__main__":
         fids = [s.strip() for s in args.sites.split(",")]
     else:
         fids = container.field_uids
+    fids = apply_exclusions(fids)
 
     try:
         if args.monthly:

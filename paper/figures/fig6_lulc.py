@@ -52,12 +52,12 @@ Y_FLOOR = -2.0  # Clip display below this; annotate clipped outliers
 
 
 def main():
-    # Load data
+    # Load data — filter to strictly paired sites (both SWIM and SSEBop finite)
     df = pd.read_csv(MONTHLY_CSV)
     shp = gpd.read_file(SHP, engine="fiona")
     lulc_map = dict(zip(shp["site_id"], shp["lc_class"]))
     df["lulc"] = df["fid"].map(lulc_map)
-    df = df.dropna(subset=["lulc"])
+    df = df.dropna(subset=["lulc", "r2_swim", "r2_ssebop"])
 
     fig, _ = plt.subplots(2, 3, figsize=(13, 7))
     axes = fig.axes
@@ -139,8 +139,9 @@ def main():
     axes[0].set_ylabel("Monthly R²")
     axes[3].set_ylabel("Monthly R²")
 
+    n_total = len(df)
     fig.suptitle(
-        "Monthly ET Performance: SWIM vs SSEBop by Land Cover (149 sites)",
+        f"Monthly ET Performance: SWIM vs SSEBop by Land Cover ({n_total} paired sites)",
         fontsize=12,
         fontweight="bold",
         y=1.01,

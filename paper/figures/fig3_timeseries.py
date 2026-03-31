@@ -144,18 +144,22 @@ def load_flux_et(fid):
 
 
 def load_ssebop_et(container, fid, etref):
-    """Load SSEBop ETf from container, interpolate, multiply by ETo."""
-    etf_path = "remote_sensing/etf/landsat/ssebop/no_mask"
-    try:
-        etf_df = container.query.dataframe(etf_path, fields=[fid])
-        if fid not in etf_df.columns:
-            return pd.Series(dtype=float)
-        etf = etf_df[fid].dropna()
-    except Exception:
-        return pd.Series(dtype=float)
+    """Load SSEBop ETf from container using mask-switched logic, interpolate, multiply by ETo.
 
-    etf_daily = etf.reindex(etref.index).interpolate(method="linear")
-    return (etf_daily * etref).clip(lower=0)
+    Matches the evaluation comparator: inv_irr by default, irr for irrigated years.
+    Falls back to no_mask if neither mask is available.
+    """
+    for mask in ["inv_irr", "no_mask"]:
+        etf_path = f"remote_sensing/etf/landsat/ssebop/{mask}"
+        try:
+            etf_df = container.query.dataframe(etf_path, fields=[fid])
+            if fid in etf_df.columns and etf_df[fid].notna().any():
+                etf = etf_df[fid].dropna()
+                etf_daily = etf.reindex(etref.index).interpolate(method="linear")
+                return (etf_daily * etref).clip(lower=0)
+        except Exception:
+            continue
+    return pd.Series(dtype=float)
 
 
 def main():

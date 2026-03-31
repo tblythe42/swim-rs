@@ -151,7 +151,7 @@ def main():
     ]
     ax.legend(handles=legend_elements, loc="lower left", framealpha=0.9, fontsize=9)
 
-    ax.set_title("Monthly R²: SWIM vs SSEBop (149 sites)", fontweight="bold")
+    ax.set_title(f"Monthly R²: SWIM vs SSEBop ({total} paired sites)", fontweight="bold")
 
     fig.savefig(OUT_PNG, bbox_inches="tight")
     fig.savefig(OUT_PDF, bbox_inches="tight")

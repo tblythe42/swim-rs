@@ -1,8 +1,14 @@
 # Example 4: Flux Network — Performance Summary
 
-**Status:** PRE-GWSUB-FIX. These numbers predate the ETf interpolation fix in
-`_compute_groundwater_subsidy()` (commit 8cb426b). Wetland/riparian results will
-change after container rebuild + recalibration.
+**Status:** PRE-GWSUB-FIX / PRE-FAIRNESS-FIX. These numbers predate the ETf
+interpolation fix in `_compute_groundwater_subsidy()` (commit 8cb426b) and the
+paired-evaluation fairness fix. Wetland/riparian results will change after
+container rebuild + recalibration. All comparative metrics will change after
+re-evaluation with strict pairing.
+
+**Evaluation method:** Daily and monthly metrics are computed on strictly paired
+observation sets — both SWIM and SSEBop are scored on the exact same days/months
+per site. Sites in the exclusion list (MB_Pch) are omitted from all outputs.
 
 **Run date:** 2026-02-21 (evaluation), 2026-02-20 (calibration)
 **Evaluation files:** `/data/ssd1/swim/4_Flux_Network/results/evaluation_metrics.csv` (Feb 21)
