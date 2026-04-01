@@ -683,7 +683,7 @@ def calibrate_all(
     if not to_process:
         print("All batches already processed.")
         show_status(ctx)
-        return
+        return 0
 
     # --- Run manifest ---
     create_run_manifest(
@@ -729,6 +729,8 @@ def calibrate_all(
         "batch_size": ctx.batch_size,
         "toml_path": ctx.toml_path,
     }
+
+    n_failed = 0
 
     for step, (batch_id, batch_fids) in enumerate(to_process):
         batch_dir = output_root / f"batch_{batch_id:03d}"
@@ -792,6 +794,7 @@ def calibrate_all(
                     "timestamp": datetime.now().isoformat(),
                 },
             )
+            n_failed += 1
             continue
 
         # Update manifest if FIDs were dropped
@@ -843,6 +846,7 @@ def calibrate_all(
                     "timestamp": datetime.now().isoformat(),
                 },
             )
+            n_failed += 1
             continue
 
         # --- PHASE D: Ingest into container ---
@@ -862,6 +866,7 @@ def calibrate_all(
                     "timestamp": datetime.now().isoformat(),
                 },
             )
+            n_failed += 1
             continue
 
         # --- PHASE E: Log success + cleanup ---
@@ -901,7 +906,10 @@ def calibrate_all(
     if prebuild_proc is not None:
         prebuild_proc.join(timeout=60)
 
-    print("\n=== Pipeline complete ===")
+    if n_failed:
+        print(f"\n=== Pipeline complete with {n_failed} failed batch(es) ===")
+    else:
+        print("\n=== Pipeline complete ===")
     os.chdir(output_root)
     persist_calibration_resolved_state(
         ctx.container_path,
@@ -910,6 +918,7 @@ def calibrate_all(
         command="calibrate-batch --action calibrate-all",
     )
     show_status(ctx)
+    return n_failed
 
 
 # ---------------------------------------------------------------------------
@@ -1125,7 +1134,7 @@ def main(argv=None):
         show_status(ctx)
 
     elif action == "calibrate-all":
-        calibrate_all(
+        n_failed = calibrate_all(
             ctx,
             resume=args.resume,
             override=args.override,
@@ -1133,11 +1142,16 @@ def main(argv=None):
             exclude_uncovered=args.exclude_uncovered,
             skip_fids_path=args.skip_fids,
         )
+        return min(n_failed, 1)
 
     elif action == "cleanup-failed":
         cleanup_failed(ctx)
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    sys.exit(main())
 # ========================= EOF ====================================================================

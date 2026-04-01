@@ -566,7 +566,7 @@ def cmd_calibrate_batch(args: argparse.Namespace) -> int:
     elif action == "cleanup-failed":
         cleanup_failed(ctx)
     elif action == "calibrate-all":
-        calibrate_all(
+        n_failed = calibrate_all(
             ctx,
             resume=args.resume,
             override=args.override,
@@ -574,6 +574,7 @@ def cmd_calibrate_batch(args: argparse.Namespace) -> int:
             exclude_uncovered=args.exclude_uncovered,
             skip_fids_path=args.skip_fids,
         )
+        return min(n_failed, 1)
     elif action == "ingest-all":
         from swimrs.calibrate.batch_support import persist_calibration_resolved_state
 
