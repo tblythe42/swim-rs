@@ -39,6 +39,7 @@ class BatchContext:
     fields_shapefile: str
     feature_id_col: str
     grouping_column: str | None
+    grouping_shapefile: str | None
     output_root: str
     mask_mode: str
     etf_target_model: str
@@ -92,6 +93,15 @@ def resolve_context(
     # Grouping column: use gridmet_id_col (GFID) when available
     grouping_col = config.gridmet_id_col
 
+    # Grouping shapefile: when a grouping column is configured, use the
+    # gridmet mapping shapefile (which contains the GFID column) rather than
+    # the plain fields shapefile.  Fall back to fields_shp if no mapping exists.
+    grouping_shp = None
+    if grouping_col and not shapefile_override:
+        mapping_shp = getattr(config, "gridmet_mapping_shp", None)
+        if mapping_shp and os.path.exists(mapping_shp):
+            grouping_shp = mapping_shp
+
     # Output root: CLI override > config pest_run_dir > project workspace
     if output_override:
         output_root = output_override
@@ -106,6 +116,7 @@ def resolve_context(
         fields_shapefile=str(fields_shp),
         feature_id_col=config.feature_id_col,
         grouping_column=grouping_col,
+        grouping_shapefile=grouping_shp,
         output_root=str(output_root),
         mask_mode=config.mask_mode or "none",
         etf_target_model=config.etf_target_model or "ssebop",
@@ -299,28 +310,31 @@ def build_batch(ctx: BatchContext, batch_fids, batch_id):
             f"  Batch {batch_id:03d}: dropped {len(dropped_fids)} NaN FIDs "
             f"{dropped_fids}, retrying with {len(remaining)} fields..."
         )
+    finally:
+        container.close()
 
-        if batch_dir.exists():
-            shutil.rmtree(batch_dir)
-        batch_dir.mkdir(parents=True, exist_ok=True)
+    # Retry with remaining fields (first container already closed above)
+    if batch_dir.exists():
+        shutil.rmtree(batch_dir)
+    batch_dir.mkdir(parents=True, exist_ok=True)
 
-        config, container = _open_and_subset(
-            ctx.toml_path, ctx.container_path, batch_dir, remaining
-        )
-        try:
-            _do_build(config, container, batch_id, ctx.noptmax, ctx.realizations)
-            return {
-                "status": "built",
-                "n_fields": len(remaining),
-                "dropped_fids": dropped_fids,
-            }
-        except Exception:
-            return {
-                "status": "build_failed",
-                "n_fields": len(remaining),
-                "dropped_fids": dropped_fids,
-                "error": traceback.format_exc()[-4096:],
-            }
+    config, container = _open_and_subset(ctx.toml_path, ctx.container_path, batch_dir, remaining)
+    try:
+        _do_build(config, container, batch_id, ctx.noptmax, ctx.realizations)
+        return {
+            "status": "built",
+            "n_fields": len(remaining),
+            "dropped_fids": dropped_fids,
+        }
+    except Exception:
+        return {
+            "status": "build_failed",
+            "n_fields": len(remaining),
+            "dropped_fids": dropped_fids,
+            "error": traceback.format_exc()[-4096:],
+        }
+    finally:
+        container.close()
 
 
 def _build_batch_worker(queue, ctx_dict, batch_fids, batch_id):
@@ -625,10 +639,10 @@ def calibrate_all(
             (output_root / "excluded_fids.json").write_text(json.dumps(excluded_record, indent=2))
             print(f"  Wrote excluded_fids.json ({len(exclude_set)} field(s))")
 
-        # Resolve grouping column: use gridmet mapping shapefile if it has the
-        # grouping column, otherwise check the fields shapefile directly
+        # Use the grouping shapefile (gridmet mapping) when available so
+        # the GFID column is present for grouped packing.
         grouping_col = ctx.grouping_column
-        shapefile = ctx.fields_shapefile
+        shapefile = ctx.grouping_shapefile or ctx.fields_shapefile
 
         raw_batches = partition_fields(
             shapefile,
@@ -703,6 +717,7 @@ def calibrate_all(
         "fields_shapefile": ctx.fields_shapefile,
         "feature_id_col": ctx.feature_id_col,
         "grouping_column": ctx.grouping_column,
+        "grouping_shapefile": ctx.grouping_shapefile,
         "output_root": ctx.output_root,
         "mask_mode": ctx.mask_mode,
         "etf_target_model": ctx.etf_target_model,
@@ -953,7 +968,7 @@ def prep(ctx: BatchContext, *, exclude_uncovered=False, skip_fids_path=None):
         print(f"  Wrote {excluded_path}")
 
     raw_batches = partition_fields(
-        ctx.fields_shapefile,
+        ctx.grouping_shapefile or ctx.fields_shapefile,
         ctx.feature_id_col,
         ctx.batch_size,
         grouping_column=ctx.grouping_column,
@@ -1060,7 +1075,7 @@ def main(argv=None):
             batches = load_batches_from_manifest(ctx.output_root, ctx.feature_id_col)
         else:
             raw = partition_fields(
-                ctx.fields_shapefile,
+                ctx.grouping_shapefile or ctx.fields_shapefile,
                 ctx.feature_id_col,
                 ctx.batch_size,
                 grouping_column=ctx.grouping_column,

@@ -626,7 +626,7 @@ def cmd_calibrate_batch(args: argparse.Namespace) -> int:
             batches = load_batches_from_manifest(ctx.output_root, ctx.feature_id_col)
         else:
             raw = partition_fields(
-                ctx.fields_shapefile,
+                ctx.grouping_shapefile or ctx.fields_shapefile,
                 ctx.feature_id_col,
                 ctx.batch_size,
                 grouping_column=ctx.grouping_column,

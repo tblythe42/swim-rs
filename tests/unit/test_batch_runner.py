@@ -373,6 +373,16 @@ class TestFindParCsv:
         result = find_par_csv(tmp_path)
         assert result.name == "project.3.par.csv"
 
+    def test_two_digit_iterations(self, tmp_path):
+        """Iteration 10 must be preferred over iteration 9 (not lexicographic)."""
+        master = tmp_path / "master"
+        master.mkdir()
+        (master / "project.9.par.csv").write_text("data")
+        (master / "project.10.par.csv").write_text("data")
+        (master / "project.2.par.csv").write_text("data")
+        result = find_par_csv(tmp_path)
+        assert result.name == "project.10.par.csv"
+
     def test_none_when_empty(self, tmp_path):
         master = tmp_path / "master"
         master.mkdir()
@@ -531,6 +541,45 @@ spinup = "{tmp_path / "pestrun" / "spinup.json"}"
 
         ctx = resolve_context(str(ex4_toml), output_override="/tmp/output")
         assert ctx.output_root == "/tmp/output"
+
+    def test_grouping_shapefile_none_when_no_mapping(self, ex4_toml):
+        """Without gridmet_mapping shapefile, grouping_shapefile is None."""
+        from swimrs.calibrate.batch_runner import resolve_context
+
+        ctx = resolve_context(str(ex4_toml))
+        # No gridmet_mapping in the test TOML, so grouping_shapefile is None
+        assert ctx.grouping_shapefile is None
+
+    def test_grouping_shapefile_set_when_mapping_exists(self, ex4_toml, tmp_path):
+        """When gridmet_mapping shapefile exists, it becomes grouping_shapefile."""
+        from swimrs.calibrate.batch_runner import resolve_context
+
+        # Create a mapping shapefile and add it to the TOML
+        gis_dir = tmp_path / "data" / "gis"
+        mapping_shp = gis_dir / "flux_fields_gfid.shp"
+        mapping_shp.touch()
+
+        content = ex4_toml.read_text()
+        content += f'\n[paths.conus]\ngridmet_mapping = "{mapping_shp}"\n'
+        ex4_toml.write_text(content)
+
+        ctx = resolve_context(str(ex4_toml))
+        assert ctx.grouping_shapefile == str(mapping_shp)
+
+    def test_shapefile_override_disables_grouping_shapefile(self, ex4_toml, tmp_path):
+        """CLI shapefile override suppresses grouping_shapefile resolution."""
+        from swimrs.calibrate.batch_runner import resolve_context
+
+        gis_dir = tmp_path / "data" / "gis"
+        mapping_shp = gis_dir / "flux_fields_gfid.shp"
+        mapping_shp.touch()
+
+        content = ex4_toml.read_text()
+        content += f'\n[paths.conus]\ngridmet_mapping = "{mapping_shp}"\n'
+        ex4_toml.write_text(content)
+
+        ctx = resolve_context(str(ex4_toml), shapefile_override="/custom/fields.shp")
+        assert ctx.grouping_shapefile is None
 
 
 # ========================= EOF ====================================================================

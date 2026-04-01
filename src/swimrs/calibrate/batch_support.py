@@ -480,11 +480,30 @@ def parse_nan_fids(exc_msg):
 # ---------------------------------------------------------------------------
 
 
+def _par_csv_iteration(path):
+    """Extract numeric iteration from a .par.csv filename.
+
+    Filenames follow the pattern ``project.N.par.csv`` where N is the
+    PEST++ iteration number.  Returns N as int, or -1 if unparseable.
+    """
+    parts = path.stem.replace(".par", "").rsplit(".", 1)
+    try:
+        return int(parts[-1])
+    except (ValueError, IndexError):
+        return -1
+
+
 def find_par_csv(batch_dir):
-    """Find the latest .par.csv in a batch's master/ directory."""
+    """Find the latest .par.csv in a batch's master/ directory.
+
+    Sorts by numeric iteration number (not lexicographic) so that
+    iteration 10 is correctly preferred over iteration 9.
+    """
     master = Path(batch_dir) / "master"
-    par_files = sorted(master.glob("*.par.csv"))
-    return par_files[-1] if par_files else None
+    par_files = list(master.glob("*.par.csv"))
+    if not par_files:
+        return None
+    return max(par_files, key=_par_csv_iteration)
 
 
 def batch_is_built(batch_dir):
