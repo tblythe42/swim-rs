@@ -532,6 +532,113 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate_batch(args: argparse.Namespace) -> int:
+    """Dispatch batch calibration actions via the native batch runner."""
+    from swimrs.calibrate.batch_runner import (
+        build_batch,
+        calibrate_all,
+        cleanup_failed,
+        ingest_all,
+        ingest_batch,
+        prep,
+        resolve_context,
+        run_batch,
+        show_status,
+    )
+
+    ctx = resolve_context(
+        args.config,
+        container_override=args.container,
+        output_override=args.output,
+        shapefile_override=args.shapefile,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        realizations=args.reals,
+        noptmax=args.noptmax,
+    )
+
+    action = args.action
+
+    if action == "prep":
+        prep(ctx, exclude_uncovered=args.exclude_uncovered, skip_fids_path=args.skip_fids)
+    elif action == "status":
+        show_status(ctx)
+    elif action == "cleanup-failed":
+        cleanup_failed(ctx)
+    elif action == "calibrate-all":
+        calibrate_all(
+            ctx,
+            resume=args.resume,
+            override=args.override,
+            skip_health=args.skip_health,
+            exclude_uncovered=args.exclude_uncovered,
+            skip_fids_path=args.skip_fids,
+        )
+    elif action == "ingest-all":
+        from swimrs.calibrate.batch_support import persist_calibration_resolved_state
+
+        ingest_all(ctx)
+        persist_calibration_resolved_state(
+            ctx.container_path,
+            ctx.toml_path,
+            ctx.output_root,
+            command="calibrate-batch --action ingest-all",
+        )
+    elif action == "ingest-batch":
+        if args.batch_id is None:
+            print("Error: --batch-id required for ingest-batch")
+            return 1
+        ingest_batch(ctx, args.batch_id)
+    elif action == "run-batch":
+        if args.batch_id is None:
+            print("Error: --batch-id required for run-batch")
+            return 1
+        from pathlib import Path
+
+        batch_dir = Path(ctx.output_root) / f"batch_{args.batch_id:03d}"
+        if not batch_dir.exists():
+            print(f"Batch directory not found: {batch_dir}")
+            return 1
+        run_batch(batch_dir, num_workers=ctx.workers)
+    elif action == "run-all":
+        from pathlib import Path
+
+        from swimrs.calibrate.batch_support import find_par_csv
+
+        batch_dirs = sorted(Path(ctx.output_root).glob("batch_*"))
+        if not batch_dirs:
+            print(f"No batch directories found in {ctx.output_root}")
+            return 1
+        print(f"Running {len(batch_dirs)} batches sequentially...")
+        for bd in batch_dirs:
+            if args.resume and find_par_csv(bd) is not None:
+                print(f"\n=== {bd.name} === SKIP (has .par.csv)")
+                continue
+            print(f"\n=== {bd.name} ===")
+            run_batch(bd, num_workers=ctx.workers)
+    elif action == "build-all":
+        from pathlib import Path
+
+        from swimrs.calibrate.batch_support import load_batches_from_manifest, partition_fields
+
+        manifest_path = Path(ctx.output_root) / "batch_manifest.csv"
+        if manifest_path.exists():
+            batches = load_batches_from_manifest(ctx.output_root, ctx.feature_id_col)
+        else:
+            raw = partition_fields(
+                ctx.fields_shapefile,
+                ctx.feature_id_col,
+                ctx.batch_size,
+                grouping_column=ctx.grouping_column,
+            )
+            batches = list(enumerate(raw))
+        print(f"Building {len(batches)} batches...")
+        for batch_id, batch_fids in batches:
+            print(f"\n--- Batch {batch_id:03d} ({len(batch_fids)} fields) ---")
+            build_batch(ctx, batch_fids, batch_id)
+    return 0
+
+
 def cmd_prep(args: argparse.Namespace) -> int:
     """Build model-ready inputs using SwimContainer (ingest → compute → export)."""
     conf_path = args.config
@@ -1291,6 +1398,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to write metrics summaries; defaults to --out-dir",
     )
     pv.set_defaults(func=cmd_evaluate)
+
+    # calibrate-batch
+    pb = sub.add_parser(
+        "calibrate-batch",
+        help="Batch calibration: partition fields, build/run/ingest PEST++ per batch",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Config-driven batch PEST++ IES calibration. Partitions fields into batches, "
+        "builds PEST++ setups, runs them, ingests results, and cleans up.",
+    )
+    pb.add_argument(
+        "config",
+        help="Path to project TOML (e.g., examples/4_Flux_Network/4_Flux_Network.toml)",
+    )
+    pb.add_argument(
+        "--action",
+        default="calibrate-all",
+        choices=[
+            "prep",
+            "build-all",
+            "run-batch",
+            "run-all",
+            "ingest-batch",
+            "ingest-all",
+            "status",
+            "calibrate-all",
+            "cleanup-failed",
+        ],
+        help="Batch action to perform",
+    )
+    pb.add_argument(
+        "--batch-id", type=int, default=None, help="Batch ID for run-batch/ingest-batch"
+    )
+    pb.add_argument("--batch-size", type=int, default=50, help="Fields per batch")
+    pb.add_argument(
+        "--workers", type=int, default=None, help="PEST workers per batch (default: from config)"
+    )
+    pb.add_argument("--noptmax", type=int, default=3, help="Max PEST iterations")
+    pb.add_argument(
+        "--reals", type=int, default=None, help="Ensemble realizations (default: from config)"
+    )
+    pb.add_argument("--resume", action="store_true", help="Skip already-ingested batches")
+    pb.add_argument("--override", action="store_true", help="Override preflight gate failures")
+    pb.add_argument(
+        "--skip-health", action="store_true", help="Use prior health check from container"
+    )
+    pb.add_argument("--exclude-uncovered", action="store_true", help="Exclude zero-coverage fields")
+    pb.add_argument(
+        "--skip-fids", type=str, default=None, help="Text file of FIDs to exclude (one per line)"
+    )
+    pb.add_argument("--container", type=str, default=None, help="Override container path")
+    pb.add_argument("--output", type=str, default=None, help="Override output directory")
+    pb.add_argument("--shapefile", type=str, default=None, help="Override fields shapefile")
+    pb.set_defaults(func=cmd_calibrate_batch)
 
     return p
 
