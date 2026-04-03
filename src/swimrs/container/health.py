@@ -241,11 +241,16 @@ class HealthPolicy:
         # Dynamic rule for snow_source
         snow_source = config.get("snow_source")
         if snow_source and health_profile != cls.PROFILE_FORWARD_RUN:
+            # ERA5 SWE lives under meteorology/era5/swe; SNODAS under snow/snodas/swe
+            if snow_source == "era5":
+                swe_path = "meteorology/era5/swe"
+            else:
+                swe_path = f"snow/{snow_source}/swe"
             rules.append(
                 PolicyRule(
                     "snow_source",
                     snow_source,
-                    f"snow/{snow_source}/swe",
+                    swe_path,
                     "exists",
                     0,
                     "FAIL",
