@@ -221,3 +221,7 @@ examples/diagnostics/
 
 # Executed notebook outputs
 *_executed.ipynb
+
+# Google Docs MCP credentials
+credentials.json
+token.json
