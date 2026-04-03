@@ -1402,17 +1402,15 @@ if __name__ == "__main__":
                     weights = np.where(eligible, obsvals / fixed_sd, 0.0)
                     d.loc[captures_for_this_df, "weight"] = weights
 
-            # Collect weight audit rows for ablation diagnostics
+            # Collect weight audit rows for ablation diagnostics.
+            # obs_idx values are Timestamps from the ETf DataFrame index.
             if not captures_for_this_df.empty and total_valid_obs > 0:
-                dates = self.observation_index[fid].loc[captures_for_this_df, "obs_idx"]
-                time_idx = pd.date_range(self.config.start_dt, self.config.end_dt, freq="D")
-                for j_cap, (obs_id, date_idx) in enumerate(zip(captures_for_this_df, dates)):
+                date_stamps = self.observation_index[fid].loc[captures_for_this_df, "obs_idx"]
+                for j_cap, (obs_id, dt) in enumerate(zip(captures_for_this_df, date_stamps)):
                     weight_val = float(d.loc[obs_id, "weight"])
                     row = {
                         "fid": fid,
-                        "date": time_idx[date_idx].strftime("%Y-%m-%d")
-                        if date_idx < len(time_idx)
-                        else str(date_idx),
+                        "date": dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt),
                         "obsval": obsvals[j_cap],
                         "weight_mode": weighting_mode,
                         "weight_pre_pdc": weight_val,
@@ -1421,9 +1419,9 @@ if __name__ == "__main__":
                     }
                     if self.etf_std is not None and self.etf_std.get(fid) is not None:
                         std_df = self.etf_std[fid]
-                        row["member_count"] = int(std_df.loc[date_idx, "ct"])
-                        row["member_mean"] = float(std_df.loc[date_idx, "mean"])
-                        row["member_std"] = float(std_df.loc[date_idx, "std"])
+                        row["member_count"] = int(std_df.loc[dt, "ct"])
+                        row["member_mean"] = float(std_df.loc[dt, "mean"])
+                        row["member_std"] = float(std_df.loc[dt, "std"])
                     else:
                         row["member_count"] = 0
                         row["member_mean"] = np.nan
