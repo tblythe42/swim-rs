@@ -156,20 +156,84 @@ def run_pest_sequence(
 
 
 if __name__ == "__main__":
+    import argparse
     import time
+
+    parser = argparse.ArgumentParser(description="Run Ex5 calibration")
+    parser.add_argument(
+        "--etf-weighting-mode",
+        choices=["spread", "fixed_sd"],
+        default=None,
+        help="Override etf_weighting_mode from TOML config",
+    )
+    parser.add_argument(
+        "--results-tag",
+        default=None,
+        help="Results subdirectory name (e.g. 'e1_spread', 'e2_fixed_sd')",
+    )
+    parser.add_argument(
+        "--fixed-sd",
+        type=float,
+        default=None,
+        help="Override etf_weighting_fixed_sd (default 0.33)",
+    )
+    parser.add_argument(
+        "--spread-floor",
+        type=float,
+        default=None,
+        help="Override etf_weighting_spread_floor (default 0.1)",
+    )
+    parser.add_argument(
+        "--min-members",
+        type=int,
+        default=None,
+        help="Override etf_weighting_min_members (default 2)",
+    )
+    parser.add_argument(
+        "--container",
+        type=str,
+        default=None,
+        help="Override container path",
+    )
+    parser.add_argument(
+        "--debug-fields",
+        type=str,
+        default=None,
+        help="Comma-separated site IDs for debug subset",
+    )
+    args = parser.parse_args()
 
     cfg = _load_config()
 
-    # Run 11: 1995-2025 container, irr_flag fix, kc_max=1.35, irr=100
-    DEBUG_FIELDS = None
+    # Apply CLI overrides to config
+    if args.etf_weighting_mode is not None:
+        cfg.etf_weighting_mode = args.etf_weighting_mode
+    if args.fixed_sd is not None:
+        cfg.etf_weighting_fixed_sd = args.fixed_sd
+    if args.spread_floor is not None:
+        cfg.etf_weighting_spread_floor = args.spread_floor
+    if args.min_members is not None:
+        cfg.etf_weighting_min_members = args.min_members
 
-    results = os.path.join(cfg.project_ws, "results", "run11_full_period")
+    debug_fields = None
+    if args.debug_fields:
+        debug_fields = [s.strip() for s in args.debug_fields.split(",")]
+
+    if args.results_tag:
+        results = os.path.join(cfg.project_ws, "results", args.results_tag)
+    else:
+        results = os.path.join(cfg.project_ws, "results", "run11_full_period")
+
+    print(f"Weighting mode: {cfg.etf_weighting_mode}")
+    print(f"Results dir: {results}")
+
     t0 = time.time()
     run_pest_sequence(
         cfg,
         results,
         pdc_remove=False,
-        debug_fields=DEBUG_FIELDS,
+        debug_fields=debug_fields,
+        container_path=args.container,
     )
     elapsed = time.time() - t0
     print(f"\nTotal elapsed: {elapsed:.1f} s ({elapsed / 60:.1f} min)")
