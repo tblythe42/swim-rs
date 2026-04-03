@@ -244,6 +244,11 @@ def prep_all(
     # Step 5: Compute dynamics
     compute_dynamics(container, cfg, overwrite=overwrite)
 
+    # Step 6: Health check
+    print("\n=== Running Health Check ===")
+    health_dir = os.path.join(cfg.data_dir, "health")
+    container.report(config=cfg, output_dir=health_dir)
+
     print("\n=== Container Preparation Complete ===")
     print(container.inventory)
 
