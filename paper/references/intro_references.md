@@ -1,8 +1,164 @@
 # Introduction References — Annotated List
 
-Ordered to follow the planned introduction arc: FAO-56 dual crop coefficient
-framework and its global impact, lookup-table Kc curves, remote-sensing-derived
-Kc curves, remote sensing ET broadly, Landsat-resolution ET algorithms, and OpenET.
+Ordered to follow the planned introduction arc: direct ET measurement and its
+limitations, FAO-56 dual crop coefficient framework and its global impact,
+lookup-table Kc curves, remote-sensing-derived Kc curves, remote sensing ET
+broadly, Landsat-resolution ET algorithms, and OpenET.
+
+---
+
+## 0. Direct ET Measurement: Value and Limitations
+
+### Baldocchi et al. (2001) — FLUXNET
+Baldocchi, D., Falge, E., Gu, L., Olson, R., Hollinger, D., Running, S., ...
+& Wofsy, S. (2001). FLUXNET: A new tool to study the temporal and spatial
+variability of ecosystem-scale carbon dioxide, water vapor, and energy flux
+densities. *Bulletin of the American Meteorological Society*, 82(11), 2415-2434.
+[3,508 citations]
+
+**Methods:** Established a global network of eddy covariance flux towers
+(FLUXNET) to measure continuous ecosystem-scale exchanges of CO2, water vapor,
+and energy across >140 sites spanning major climate and vegetation types.
+**Findings:** The network provides high-temporal-resolution observations of ET
+and carbon fluxes, but tower footprints are limited to ~1 km2 and the global
+network remains spatially sparse relative to the heterogeneity of land surfaces.
+**Impact:** Created the observational backbone for validating remote sensing and
+model-based ET estimates, while simultaneously demonstrating that tower
+measurements alone cannot provide wall-to-wall ET accounting at regional to
+continental scales.
+
+### Novick et al. (2018) — The AmeriFlux Network
+Novick, K.A., Biederman, J.A., Desai, A.R., Litvak, M.E., Moore, D.J.P.,
+Scott, R.L., & Torn, M.S. (2018). The AmeriFlux network: A coalition of the
+willing. *Agricultural and Forest Meteorology*, 249, 444-456. [262 citations]
+
+**Methods:** Described the structure, governance, and scientific contributions of
+the AmeriFlux network — the North American component of FLUXNET — which operates
+>200 eddy covariance sites across diverse ecosystems and climate zones.
+**Findings:** AmeriFlux has enabled synthesis studies spanning water, carbon, and
+energy cycling, but the network's voluntary, PI-driven model means that site
+selection is uneven, with croplands and forests overrepresented relative to
+grasslands, shrublands, and managed landscapes.
+**Impact:** Established AmeriFlux as the primary long-term observational
+infrastructure for validating remote sensing and model-based ET estimates across
+North America, while highlighting spatial gaps that limit validation coverage for
+operational ET products.
+
+### Rana & Katerji (2000) — Field ET Measurement Review
+Rana, G. & Katerji, N. (2000). Measurement and estimation of actual
+evapotranspiration in the field under Mediterranean climate: a review.
+*European Journal of Agronomy*, 13(2-3), 125-153. [652 citations]
+
+**Methods:** Reviewed the principal methods for direct field measurement of
+ET — weighing lysimeters, eddy covariance, Bowen ratio energy balance, and
+sap flow — evaluating their accuracy, cost, spatial representativeness, and
+practical constraints.
+**Findings:** Lysimeters provide the most accurate point measurements but are
+expensive, immobile, and labor-intensive; eddy covariance is the most versatile
+tower-based method but requires careful quality control and is subject to energy
+balance non-closure of 10-30%.
+**Impact:** Documented the fundamental tradeoff between measurement accuracy and
+spatial scalability that motivates the use of model-based and remote-sensing
+approaches for regional ET estimation.
+
+### Wilson et al. (2002) — Energy Balance Closure at FLUXNET Sites
+Wilson, K., Goldstein, A., Falge, E., Aubinet, M., Baldocchi, D., Berbigier, P.,
+... & Verma, S. (2002). Energy balance closure at FLUXNET sites. *Agricultural
+and Forest Meteorology*, 113(1-4), 223-243. [2,282 citations]
+
+**Methods:** Analyzed energy balance closure across 22 FLUXNET eddy covariance
+sites, comparing the sum of measured turbulent fluxes (sensible + latent heat)
+to available energy (net radiation minus ground heat flux).
+**Findings:** Turbulent fluxes accounted for only 80% of available energy on
+average, with closure ratios ranging from 0.53 to 0.99 across sites, indicating
+a systematic underestimation of ET by 10-30% at most towers.
+**Impact:** Established that even well-maintained flux towers have inherent
+measurement uncertainties that propagate into any ET validation or upscaling
+exercise, reinforcing the need for independent, spatially distributed approaches
+to constrain regional ET.
+
+---
+
+## 0b. Early Irrigation Water Requirement Methods
+
+### Blaney & Criddle (1962) — Consumptive Use and Irrigation Water Requirements
+Blaney, H.F. & Criddle, W.D. (1962). Determining consumptive use and irrigation
+water requirements. *USDA Technical Bulletin No. 1275*, 59 pp. [256 citations]
+
+**Methods:** Developed a temperature-based empirical formula relating monthly
+consumptive use to mean air temperature and percentage of annual daytime hours,
+multiplied by crop-specific seasonal coefficients.
+**Findings:** The method provided operationally practical consumptive use estimates
+using only temperature and crop type, enabling irrigation planning across the
+western US where detailed meteorological data were unavailable.
+**Impact:** Became the standard USDA/SCS method for irrigation water requirement
+estimation for decades; its simplicity enabled widespread adoption but the
+temperature-only formulation systematically underperforms in arid, windy, or
+humid climates where radiation and vapor pressure deficit dominate ET dynamics.
+
+### Allen & Pruitt (1986) — Rational Use of the FAO Blaney-Criddle Formula
+Allen, R.G. & Pruitt, W.O. (1986). Rational use of the FAO Blaney-Criddle
+formula. *Journal of Irrigation and Drainage Engineering*, 112(2), 139-155.
+[165 citations]
+
+**Methods:** Evaluated the FAO-24 Blaney-Criddle formula against lysimeter data
+across diverse climates and proposed correction factors for humidity, wind speed,
+and sunshine duration to reduce systematic bias.
+**Findings:** The uncorrected Blaney-Criddle formula produced errors of 25-40%
+in arid and windy environments; correction factors reduced errors substantially
+but could not fully overcome the method's lack of explicit radiation and vapor
+pressure deficit terms.
+**Impact:** Documented the fundamental limitations of temperature-only ET methods
+and motivated the transition to physically based reference ET approaches
+culminating in FAO-56 Penman-Monteith.
+
+### Jensen et al. (1990) — Evapotranspiration and Irrigation Water Requirements
+Jensen, M.E., Burman, R.D., Allen, R.G. (1990). Evapotranspiration and irrigation
+water requirements. *ASCE Manual of Practice No. 70*, 332 pp. [1,829 citations]
+
+**Methods:** Comprehensive ASCE manual comparing 20+ ET estimation methods —
+including Blaney-Criddle, Hargreaves, Priestley-Taylor, and Penman variants —
+against lysimeter data from 11 global locations.
+**Findings:** Temperature-based methods (Blaney-Criddle, Thornthwaite) performed
+poorly outside their calibration regions, while combination methods incorporating
+radiation, wind, and humidity were more robust across climates.
+**Impact:** Established the comparative framework that led to adoption of
+Penman-Monteith as the ASCE/FAO standard reference ET method and provided the
+definitive documentation of irrigation water requirement estimation procedures
+used by NRCS and western US water agencies.
+
+### Amatya et al. (1995) — Comparison of Methods for Estimating REF-ET
+Amatya, D.M., Skaggs, R.W., & Gregory, J.D. (1995). Comparison of methods for
+estimating REF-ET. *Journal of Irrigation and Drainage Engineering*, 121(6),
+427-435. [243 citations]
+
+**Methods:** Compared Penman-Monteith, Priestley-Taylor, Turc, Blaney-Criddle,
+and Thornthwaite reference ET methods against pan evaporation in the humid
+Southeast United States over multiple years.
+**Findings:** Temperature-based methods (Blaney-Criddle, Thornthwaite) produced
+seasonal biases of 15-30% relative to Penman-Monteith, with Blaney-Criddle
+overestimating in summer and Thornthwaite underestimating during high-radiation
+periods; radiation-based methods performed better but still required local
+calibration.
+**Impact:** Demonstrated that simpler empirical methods introduce climate-dependent
+biases that compound when used for irrigation scheduling, reinforcing the case
+for physically based reference ET approaches.
+
+### Almorox et al. (2015) — Global Performance Ranking of Temperature-Based ET
+Almorox, J., Quej, V.H., & Marti, P. (2015). Global performance ranking of
+temperature-based approaches for evapotranspiration estimation considering Köppen
+climate classes. *Journal of Hydrology*, 528, 514-522. [179 citations]
+
+**Methods:** Evaluated six temperature-based ET methods (Hargreaves-Samani,
+Thornthwaite, Blaney-Criddle, and three others) against FAO-56 Penman-Monteith
+across 4,652 stations covering all Köppen climate classes worldwide.
+**Findings:** No single temperature-based method performs acceptably across all
+climates; Hargreaves-Samani was the least biased overall but still showed errors
+exceeding 20% in humid tropical and cold climates, and Blaney-Criddle ranked
+among the worst performers globally.
+**Impact:** Provided the definitive global evidence that temperature-only ET
+methods are not transferable across climate regions, establishing a quantitative
+basis for the transition to physically complete reference ET formulations.
 
 ---
 
@@ -53,6 +209,23 @@ its applicability at the regional scale.
 **Impact:** Demonstrated that the FAO-56 dual Kc framework could be extended
 from field to regional water balance assessments, motivating subsequent
 large-scale applications.
+
+### Er-Raki et al. (2007) — Combining FAO-56 and Ground-Based Remote Sensing
+Er-Raki, S., Chehbouni, A., Guemouria, N., Duchemin, B., Ezzahar, J., &
+Hadria, R. (2007). Combining FAO-56 model and ground-based remote sensing to
+estimate water consumptions of wheat crops in a semi-arid region. *Agricultural
+Water Management*, 87(1), 41-54. [294 citations]
+
+**Methods:** Compared FAO-56 ET estimates using tabulated Kc values against
+estimates using locally calibrated Kc derived from ground-based NDVI measurements
+for wheat in semi-arid Morocco, validating both against eddy covariance data.
+**Findings:** Tabulated FAO-56 Kc values overestimated seasonal ET by up to 30%
+relative to flux tower observations, while NDVI-derived Kc reduced errors to
+within 10%, primarily because the tabulated curves misrepresented local planting
+dates, cultivar vigor, and stress timing.
+**Impact:** Provided direct field evidence that replacing fixed Kc tables with
+remotely sensed crop condition substantially improves soil water balance accuracy,
+motivating the integration of remote sensing into FAO-56-type frameworks.
 
 ---
 
@@ -371,3 +544,198 @@ for non-cropland land covers, particularly shrublands and forests.
 **Impact:** Provided the benchmark accuracy statistics that water managers
 require for adoption, while clearly identifying the remaining accuracy gap for
 non-agricultural land covers that motivates complementary modeling approaches.
+
+---
+
+## 7. Foundational Thermal RS-ET and Two-Source Models
+
+### Norman et al. (1995) — Two-Source Energy Balance Model
+Norman, J.M., Kustas, W.P., & Humes, K.S. (1995). Source approach for estimating
+soil and vegetation energy fluxes in observations of directional radiometric surface
+temperature. *Agricultural and Forest Meteorology*, 77(3-4), 263-293. [1,651 citations]
+
+**Methods:** Developed a two-source (soil + canopy) model that partitions thermal
+radiometric surface temperature into separate soil and vegetation components to
+independently estimate sensible and latent heat fluxes from each source.
+**Findings:** The two-source approach substantially improved flux estimates over
+sparse canopies compared to single-source models, which conflate soil and vegetation
+temperatures and systematically overestimate sensible heat in partially vegetated
+landscapes.
+**Impact:** Established the theoretical foundation for multi-source thermal ET
+algorithms including ALEXI/disALEXI and TSEB, which became the dominant physically
+based approach for disaggregating satellite thermal imagery into component fluxes.
+
+### Anderson et al. (1997) — ALEXI Time-Integrated Two-Source Model
+Anderson, M.C., Norman, J.M., Diak, G.R., Kustas, W.P., & Mecikalski, J.R.
+(1997). A two-source time-integrated model for estimating surface fluxes using
+thermal infrared remote sensing. *Remote Sensing of Environment*, 60(2), 195-216.
+[785 citations]
+
+**Methods:** Coupled the Norman et al. (1995) two-source model with an atmospheric
+boundary layer (ABL) growth model, using the morning rise in land surface
+temperature from geostationary satellites to constrain the surface energy balance
+without requiring absolute LST calibration.
+**Findings:** The time-differencing approach reduced sensitivity to errors in
+atmospheric correction and surface emissivity, producing robust regional flux
+estimates from GOES thermal imagery at 5-10 km resolution.
+**Impact:** Introduced the ALEXI framework that became the basis for continental-
+scale ET mapping and the multi-scale disaggregation strategy (disALEXI) used in
+OpenET.
+
+### Anderson et al. (2004) — DisALEXI Disaggregation
+Anderson, M.C., Norman, J.M., Mecikalski, J.R., Torn, R.D., Kustas, W.P., &
+Basara, J.B. (2004). A multiscale remote sensing model for disaggregating regional
+fluxes to micrometeorological scales. *Journal of Hydrometeorology*, 5(2), 343-363.
+[225 citations]
+
+**Methods:** Developed the DisALEXI algorithm to spatially disaggregate ALEXI
+regional fluxes to Landsat-scale (30 m) resolution using higher-resolution thermal
+imagery from polar-orbiting satellites.
+**Findings:** Disaggregated fluxes agreed well with eddy covariance tower
+measurements across cropland and grassland sites, demonstrating that the multi-scale
+strategy preserves regional energy balance constraints while resolving field-level
+variability.
+**Impact:** Made the ALEXI framework applicable at field scale, enabling its
+integration into OpenET and other operational agricultural ET monitoring systems.
+
+### Anderson et al. (2011) — ALEXI/DisALEXI Continental Mapping
+Anderson, M.C., Kustas, W.P., Norman, J.M., Hain, C.R., Mecikalski, J.R.,
+Schultz, L., ..., Gao, F. (2011). Mapping daily evapotranspiration at field to
+continental scales using geostationary and polar orbiting satellite imagery.
+*Hydrology and Earth System Sciences*, 15, 223-239. [557 citations]
+
+**Methods:** Presented the operational ALEXI/DisALEXI multi-sensor framework for
+routine daily ET mapping from geostationary (GOES) and polar-orbiting (Landsat,
+MODIS) thermal imagery, covering field to continental scales.
+**Findings:** The system produced daily ET maps over the US with demonstrated
+accuracy against flux towers and compatibility with multiple geostationary satellite
+systems worldwide.
+**Impact:** Established ALEXI/DisALEXI as an operational continental-scale ET
+monitoring capability and demonstrated the feasibility of global thermal ET mapping
+using multiple geostationary satellite networks.
+
+---
+
+## 8. Global ET Products
+
+### Mu et al. (2011) — MOD16 Global ET Algorithm
+Mu, Q., Zhao, M., & Running, S.W. (2011). Improvements to a MODIS global
+terrestrial evapotranspiration algorithm. *Remote Sensing of Environment*, 115(8),
+1781-1800. [2,496 citations]
+
+**Methods:** Improved the Penman-Monteith-based MOD16 algorithm for estimating
+global terrestrial ET from MODIS FPAR/LAI, albedo, and reanalysis meteorology at
+1 km resolution and 8-day compositing.
+**Findings:** Global annual ET was estimated at ~62,800 km3 with validated
+performance against 46 AmeriFlux eddy covariance towers (average correlation 0.86);
+the improved algorithm better captured ET dynamics in arid and cold environments.
+**Impact:** Produced the first operationally sustained global satellite ET product
+(MOD16A2), widely used for large-scale water budget analyses, drought monitoring,
+and land surface model benchmarking.
+
+### Martens et al. (2017) — GLEAM v3
+Martens, B., Miralles, D.G., Lievens, H., van der Schalie, R., de Jeu, R.A.M.,
+Fernandez-Prieto, D., Beck, H.E., Dorigo, W.A., & Verhoest, N.E.C. (2017).
+GLEAM v3: satellite-based land evaporation and root-zone soil moisture.
+*Geoscientific Model Development*, 10, 1903-1925. [2,114 citations]
+
+**Methods:** Extended the GLEAM Priestley-Taylor framework with revised evaporative
+stress formulations, optimized drainage, and microwave soil moisture assimilation
+to produce three global ET datasets spanning 1980-2015 at 0.25 degree resolution.
+**Findings:** Validated against 91 eddy covariance towers with average correlations
+of 0.78-0.81 for evaporation and improved root-zone soil moisture estimates
+relative to v2 (correlations increased from 0.47 to 0.53 for the second soil layer).
+**Impact:** Provided the longest-record global satellite ET dataset, widely used for
+climate trend analysis and as a benchmark for land surface models and other RS ET
+products.
+
+---
+
+## 9. ECOSTRESS and Sentinel-2 Extensions
+
+### Hulley et al. (2017) — ECOSTRESS Mission
+Hulley, G., Hook, S., Fisher, J., & Lee, C. (2017). ECOSTRESS, a NASA
+Earth-Ventures Instrument for studying links between the water cycle and plant
+health over the diurnal cycle. *IEEE International Geoscience and Remote Sensing
+Symposium (IGARSS)*, 5394-5396. [66 citations]
+
+**Methods:** Described the ECOSTRESS thermal infrared instrument on the
+International Space Station, designed to measure land surface temperature at
+~70 m resolution with a precessing orbit that samples the diurnal temperature
+cycle.
+**Findings:** The non-sun-synchronous orbit enables thermal measurements at
+varying times of day, capturing diurnal ET dynamics inaccessible to Landsat or
+other fixed-overpass satellites.
+**Impact:** Provides complementary thermal observations that increase the temporal
+density of field-scale ET retrievals when combined with Landsat/Sentinel-2, and
+enables new science on plant water stress timing and diurnal water use patterns.
+
+### Xiao et al. (2021) — Emerging Satellite Observations for Diurnal Cycling
+Xiao, J., Fisher, J.B., Hashimoto, H., Ichii, K., & Parazoo, N.C. (2021).
+Emerging satellite observations for diurnal cycling of ecosystem processes.
+*Nature Plants*, 7, 877-887. [142 citations]
+
+**Methods:** Reviewed new satellite capabilities — including ECOSTRESS, OCO-2/3,
+TROPOMI, and GOES-R — for observing diurnal cycles of photosynthesis, ET, and
+thermal stress that fixed-overpass sensors miss.
+**Findings:** Diurnal sampling reveals systematic biases in daytime-only ET
+estimates and captures afternoon plant stress that morning-overpass sensors
+underestimate.
+**Impact:** Motivates the integration of non-sun-synchronous sensors like
+ECOSTRESS into operational ET frameworks such as OpenET to improve temporal
+sampling and stress detection.
+
+---
+
+## 10. ET Partitioning Limitations and Hybrid RS + SWB Approaches
+
+### Melton et al. (2012) — SIMS Framework
+Melton, F.S., Johnson, L.F., Lund, C.P., Pierce, L.L., Michaelis, A.R., Hiatt, S.,
+..., Nemani, R. (2012). Satellite Irrigation Management Support with the Terrestrial
+Observation and Prediction System. *IEEE Journal of Selected Topics in Applied Earth
+Observations and Remote Sensing*, 5(6), 1709-1721. [116 citations]
+
+**Methods:** Developed the SIMS framework for estimating crop ET from satellite
+reflectance-derived fractional cover and the Allen-Pereira crop coefficient approach,
+integrated with gridded weather data and soil water balance modeling.
+**Findings:** SIMS provided ET estimates within 10-15% of lysimeter and flux tower
+measurements for multiple California crops without requiring thermal imagery,
+demonstrating the viability of reflectance-only ET estimation for irrigation
+scheduling support.
+**Impact:** Established the optical/reflectance-based crop coefficient approach as
+a complement to thermal energy-balance methods, and became one of the six core
+models in the OpenET ensemble.
+
+### Pearson et al. (2024) — Upper Colorado Historical ET and Consumptive Use
+Pearson, C., Minor, B., Morton, C., Volk, J., Dunkerly, C., Jensen, E., ReVelle, P.,
+Kilic, A., Allen, R., & Huntington, J.L. (2024). Historical evapotranspiration and
+consumptive use of irrigated areas of the Upper Colorado River Basin. *DRI Report*,
+41304.
+
+**Methods:** Combined FAO-56-style ET-Demands modeling with eeMETRIC satellite ET
+to estimate historical irrigated consumptive use across the Upper Colorado River
+Basin, separating irrigation-supplied ET from precipitation-supplied ET over a
+multi-decade record.
+**Findings:** The hybrid RS + process-model workflow produced basin-wide consumptive
+use estimates that were spatially explicit and temporally continuous, demonstrating
+that merging satellite ET with soil water balance models can advance ET partitioning
+beyond either approach alone.
+**Impact:** Represents the closest operational precedent to the SWIM-RS approach,
+but relies on regionally assigned crop coefficients rather than field-specific
+calibration — the limitation that SWIM-RS addresses directly.
+
+### Glenn et al. (2011) — Vegetation Index Crop Coefficients Review
+Glenn, E.P., Neale, C.M.U., Hunsaker, D.J., & Nagler, P.L. (2011). Vegetation
+index-based crop coefficients to estimate evapotranspiration by remote sensing in
+agricultural and natural ecosystems. *Hydrological Processes*, 25(26), 4050-4062.
+[233 citations]
+
+**Methods:** Reviewed the theoretical basis and empirical evidence for deriving
+crop coefficients from vegetation indices (NDVI, EVI, SAVI), synthesizing results
+across agricultural and riparian ecosystems.
+**Findings:** VI-Kc relationships are robust across crop types when properly
+calibrated, but relationships vary with sensor, VI choice, and canopy architecture;
+the review identified standardization of VI-Kc protocols as a key need.
+**Impact:** Provided the conceptual framework for replacing tabulated Kc with
+satellite-observed vegetation condition, directly motivating NDVI-based
+calibration approaches like those used in SWIM-RS.
