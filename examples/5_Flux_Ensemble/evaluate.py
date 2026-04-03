@@ -497,6 +497,8 @@ def evaluate_etf(cfg, container, par_csv, fids):
     for fid, row in ranked.tail(10).iterrows():
         print(f"  {fid:<20} R2={row['r2_median']:.3f}  RMSE={row['rmse_median']:.3f}")
 
+    # Set fid+model as index so saved CSVs are self-identifying
+    df = df.set_index(["fid", "model"])
     return df
 
 

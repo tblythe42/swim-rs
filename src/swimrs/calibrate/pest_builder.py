@@ -540,7 +540,8 @@ class PestBuilder:
             "member_mean",
             "member_std",
             "weight_mode",
-            "weight",
+            "weight_pre_pdc",
+            "weight_final",
             "eligible",
         ]
         df = df[[c for c in col_order if c in df.columns]]
@@ -1406,6 +1407,7 @@ if __name__ == "__main__":
                 dates = self.observation_index[fid].loc[captures_for_this_df, "obs_idx"]
                 time_idx = pd.date_range(self.config.start_dt, self.config.end_dt, freq="D")
                 for j_cap, (obs_id, date_idx) in enumerate(zip(captures_for_this_df, dates)):
+                    weight_val = float(d.loc[obs_id, "weight"])
                     row = {
                         "fid": fid,
                         "date": time_idx[date_idx].strftime("%Y-%m-%d")
@@ -1413,7 +1415,8 @@ if __name__ == "__main__":
                         else str(date_idx),
                         "obsval": obsvals[j_cap],
                         "weight_mode": weighting_mode,
-                        "weight": d.loc[obs_id, "weight"],
+                        "weight_pre_pdc": weight_val,
+                        "weight_final": weight_val,
                         "eligible": bool(eligible[j_cap]),
                     }
                     if self.etf_std is not None and self.etf_std.get(fid) is not None:

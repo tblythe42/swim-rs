@@ -187,21 +187,22 @@ def _build_weight_summary(exp_dir, summary_dir, exp_id):
 
     grouped = audit.groupby("fid")
     rows = []
-    total_weight_all = audit.loc[audit["weight"] > 0, "weight"].sum()
+    wcol = "weight_final" if "weight_final" in audit.columns else "weight"
+    total_weight_all = audit.loc[audit[wcol] > 0, wcol].sum()
     for fid, grp in grouped:
-        nonzero = grp[grp["weight"] > 0]
+        nonzero = grp[grp[wcol] > 0]
         rows.append(
             {
                 "fid": fid,
                 "n_captures": len(grp),
                 "n_eligible": int(grp["eligible"].sum()),
                 "n_nonzero_weight": len(nonzero),
-                "total_weight": nonzero["weight"].sum(),
-                "weight_share": nonzero["weight"].sum() / total_weight_all
+                "total_weight": nonzero[wcol].sum(),
+                "weight_share": nonzero[wcol].sum() / total_weight_all
                 if total_weight_all > 0
                 else 0,
-                "mean_weight": nonzero["weight"].mean() if len(nonzero) > 0 else 0,
-                "max_weight": nonzero["weight"].max() if len(nonzero) > 0 else 0,
+                "mean_weight": nonzero[wcol].mean() if len(nonzero) > 0 else 0,
+                "max_weight": nonzero[wcol].max() if len(nonzero) > 0 else 0,
                 "mean_member_std": grp["member_std"].mean(),
             }
         )
