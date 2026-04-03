@@ -1239,6 +1239,11 @@ if __name__ == "__main__":
     def _write_etf_obs(self, target: str, members: list[str] | None) -> int:
         obsnme_str = "oname:obs_etf_{}_otype:arr_i:{}_j:0"
 
+        weighting_mode = getattr(self.config, "etf_weighting_mode", "spread")
+        fixed_sd = getattr(self.config, "etf_weighting_fixed_sd", 0.33)
+        spread_floor = getattr(self.config, "etf_weighting_spread_floor", 0.1)
+        min_members = getattr(self.config, "etf_weighting_min_members", 2)
+
         if members is not None:
             self.etf_std = {fid: None for fid in self.pest_args["targets"]}
 
@@ -1277,10 +1282,8 @@ if __name__ == "__main__":
                     if k != "fallow_years" and v["f_irr"] >= irr_threshold
                 ]
                 irr_index = [i for i in etf.index if hasattr(i, "year") and i.year in irr_years]
-                members_and_target = members + [target]
-
-                for member in members_and_target:
-                    # Get this member's ETf data directly
+                # Compute spread from members only (not members + target)
+                for member in members:
                     member_etf = self._get_etf_data(fid, model=member)
 
                     mask_cols = []
@@ -1296,10 +1299,9 @@ if __name__ == "__main__":
                             if irr_col in member_etf.columns:
                                 etf_std.loc[irr_index, member] = member_etf.loc[irr_index, irr_col]
                     else:
-                        # No data for this member, fill with NaN
                         etf_std[member] = pd.Series(np.nan, index=etf.index)
 
-                valid_members = [m for m in members_and_target if m in etf_std.columns]
+                valid_members = [m for m in members if m in etf_std.columns]
 
                 multimodel_dt_mean = pd.Series(index=etf_std.index, dtype=float)
                 multimodel_dt_std = pd.Series(index=etf_std.index, dtype=float)
@@ -1307,8 +1309,7 @@ if __name__ == "__main__":
 
                 if valid_members:
                     data_subset = etf_std[valid_members]
-                    capture_mask = etf_std.replace(np.nan, 0.0).astype(bool)
-                    capture_mask.columns = valid_members
+                    capture_mask = data_subset.notna()
                     multimodel_dt_count = capture_mask.sum(axis=1)
                     masked_data = data_subset.where(capture_mask)
                     multimodel_dt_mean = masked_data.mean(axis=1)
@@ -1332,14 +1333,24 @@ if __name__ == "__main__":
             d["weight"] = 0.0
 
             if not captures_for_this_df.empty and total_valid_obs > 0:
-                # Magnitude-weighted: high-ETf dates contribute more to phi
                 obsvals = d.loc[captures_for_this_df, "obsval"].values
-                if self.etf_std is not None and self.etf_std.get(fid) is not None:
-                    d.loc[captures_for_this_df, "weight"] = obsvals / (
-                        self.etf_std[fid].loc[capture_dates, "std"].values + 0.1
+                if (
+                    weighting_mode == "spread"
+                    and self.etf_std is not None
+                    and self.etf_std.get(fid) is not None
+                ):
+                    std_vals = self.etf_std[fid].loc[capture_dates, "std"].values
+                    ct_vals = self.etf_std[fid].loc[capture_dates, "ct"].values
+                    # Zero out weight where fewer than min_members contributed
+                    eligible = ct_vals >= min_members
+                    weights = np.where(
+                        eligible,
+                        obsvals / (std_vals + spread_floor),
+                        0.0,
                     )
+                    d.loc[captures_for_this_df, "weight"] = weights
                 else:
-                    d.loc[captures_for_this_df, "weight"] = obsvals / 0.33
+                    d.loc[captures_for_this_df, "weight"] = obsvals / fixed_sd
 
             d.loc[d["obsval"].isna(), "obsval"] = -99.0
             d.loc[d["weight"].isna(), "weight"] = 0.0
@@ -1389,7 +1400,8 @@ if __name__ == "__main__":
             obs.loc[etf_idx, "standard_deviation"] = np.array(etf_std_vals)
 
         else:
-            obs.loc[etf_idx, "standard_deviation"] = obs["obsval"] * 0.33
+            fixed_sd = getattr(self.config, "etf_weighting_fixed_sd", 0.33)
+            obs.loc[etf_idx, "standard_deviation"] = fixed_sd
 
         swe_idx = [i for i, r in obs.iterrows() if "swe" in i and r["obsval"] > 0.0]
         obs.loc[swe_idx, "standard_deviation"] = 5.0

@@ -90,6 +90,10 @@ class ProjectConfig:
         self.etf_target_instrument = "landsat"
         self.ensemble_source = "computed"
         self.etf_ensemble_members = None
+        self.etf_weighting_mode = "spread"
+        self.etf_weighting_fixed_sd = 0.33
+        self.etf_weighting_spread_floor = 0.1
+        self.etf_weighting_min_members = 2
         self.workers = None
         self.realizations = None
         self.calibration_dir = None
@@ -350,6 +354,15 @@ class ProjectConfig:
                 f"Invalid ensemble_source={self.ensemble_source!r}. Must be 'computed' or 'openet'."
             )
         self.etf_ensemble_members = calib_toml_conf.get("etf_ensemble_members")
+        self.etf_weighting_mode = calib_toml_conf.get("etf_weighting_mode", "spread")
+        if self.etf_weighting_mode not in ("spread", "fixed_sd"):
+            raise ValueError(
+                f"Invalid etf_weighting_mode={self.etf_weighting_mode!r}. "
+                "Must be 'spread' or 'fixed_sd'."
+            )
+        self.etf_weighting_fixed_sd = calib_toml_conf.get("etf_weighting_fixed_sd", 0.33)
+        self.etf_weighting_spread_floor = calib_toml_conf.get("etf_weighting_spread_floor", 0.1)
+        self.etf_weighting_min_members = calib_toml_conf.get("etf_weighting_min_members", 2)
         self.workers = calib_toml_conf.get("workers")
         self.realizations = calib_toml_conf.get("realizations")
         self.obs_folder = calib_toml_conf.get("obs_folder")
