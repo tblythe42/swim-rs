@@ -46,6 +46,9 @@ _PEST_NAME_MAP = {
     "mad": "mad",
 }
 
+# Shared ETf validity ceiling for ingested calibration targets.
+MAX_VALID_ETF = 2.0
+
 
 def parse_pest_par_csv(
     par_csv: str | Path,
@@ -365,6 +368,8 @@ class Ingestor(Component):
             overwrite: If True, replace existing data
             min_etf: Minimum valid ETf value (default: 0.05). Values below
                 this are treated as noise/artifacts and set to NaN.
+                Values above ``MAX_VALID_ETF`` are also treated as invalid
+                and set to NaN.
             workers: Number of threads for parallel CSV reading (default: 1)
             scale_factor: Multiply all ETf values by this factor (default: 1.0).
                 Use to apply a uniform algorithm bias correction (e.g., 0.80
@@ -406,18 +411,28 @@ class Ingestor(Component):
                     "ingest",
                     target=path,
                     source=str(source_dir),
-                    params={"model": model, "instrument": instrument, "mask": mask},
+                    params={
+                        "model": model,
+                        "instrument": instrument,
+                        "mask": mask,
+                        "min_etf": min_etf,
+                        "max_etf": MAX_VALID_ETF,
+                        "scale_factor": scale_factor,
+                    },
                     records_count=0,
                     success=True,
                 )
 
-            # Filter values below min_etf (default 0.05) as noise/artifacts
-            # This matches legacy sparse_time_series() behavior which replaces
-            # 0.0 with NaN and filters values < 0.05
+            # Filter obvious ETf artifacts before writing:
+            # - below min_etf: legacy sparse_time_series-style noise removal
+            # - above MAX_VALID_ETF: impossible ETf values
             all_data = all_data.where(all_data >= min_etf)
+            all_data = all_data.where(all_data <= MAX_VALID_ETF)
 
             if scale_factor != 1.0:
                 all_data = all_data * scale_factor
+                # Guard against scaled values crossing the shared ETf ceiling.
+                all_data = all_data.where(all_data <= MAX_VALID_ETF)
 
             # Align to container grid and write
             records = self._write_timeseries(path, all_data, fields, overwrite=overwrite)
@@ -431,7 +446,14 @@ class Ingestor(Component):
                 target=path,
                 source=str(source_dir),
                 source_format="earth_engine_csv",
-                params={"model": model, "instrument": instrument, "mask": mask},
+                params={
+                    "model": model,
+                    "instrument": instrument,
+                    "mask": mask,
+                    "min_etf": min_etf,
+                    "max_etf": MAX_VALID_ETF,
+                    "scale_factor": scale_factor,
+                },
                 fields_affected=list(all_data.columns),
                 records_count=records,
             )
