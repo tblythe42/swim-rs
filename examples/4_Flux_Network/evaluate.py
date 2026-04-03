@@ -25,8 +25,6 @@ from swimrs.process.input import build_swim_input
 from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
-IRR_THRESHOLD = 0.3
-
 # Canonical exclusion list — sites with known data quality issues that should
 # not appear in any comparative evaluation. Keep this list general so new
 # exclusions can be added without ad hoc filters elsewhere.
@@ -141,60 +139,7 @@ def load_flux_et(fid, flux_dir):
     return pd.Series(dtype=float)
 
 
-def load_ssebop_etf(container, fid, irr_data):
-    """Load SSEBop NHM ETf from the container with year-appropriate mask.
-
-    Returns pd.Series of ETf values, or None if no data available.
-    """
-    field_irr = irr_data.get(fid, {})
-    irr_years = set()
-    for k, v in field_irr.items():
-        if k == "fallow_years":
-            continue
-        try:
-            if isinstance(v, dict) and v.get("f_irr", 0.0) >= IRR_THRESHOLD:
-                irr_years.add(int(k))
-        except (ValueError, TypeError):
-            continue
-
-    # Load both masks
-    etf_inv = etf_irr = None
-    for mask in ["inv_irr", "irr"]:
-        etf_path = f"remote_sensing/etf/landsat/ssebop/{mask}"
-        try:
-            etf_df = container.query.dataframe(etf_path, fields=[fid])
-            if fid in etf_df.columns:
-                series = etf_df[fid]
-                if mask == "inv_irr":
-                    etf_inv = series
-                else:
-                    etf_irr = series
-        except Exception:
-            pass
-
-    inv_valid = etf_inv is not None and etf_inv.notna().any()
-    irr_valid = etf_irr is not None and etf_irr.notna().any()
-
-    if not inv_valid and not irr_valid:
-        return None
-
-    # Default to inv_irr, switch to irr for irrigated years
-    if inv_valid:
-        combined = etf_inv.copy()
-    else:
-        combined = pd.Series(np.nan, index=etf_irr.index)
-
-    if irr_valid and irr_years:
-        irr_mask = combined.index.year.isin(irr_years)
-        combined.loc[irr_mask] = etf_irr.loc[irr_mask]
-
-    if not inv_valid and irr_valid:
-        combined = etf_irr.copy()
-
-    return combined
-
-
-def load_ssebop_etf_no_mask(container, fid):
+def load_ssebop_etf(container, fid):
     """Load SSEBop NHM ETf from the no_mask path (full footprint)."""
     etf_path = "remote_sensing/etf/landsat/ssebop/no_mask"
     try:
@@ -219,7 +164,7 @@ def calc_metrics(obs, mod):
     return {"n": len(obs), "r2": r2, "r": r, "rmse": rmse, "bias": bias}
 
 
-def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
+def evaluate(cfg, container, par_csv, fids, flux_dir):
     """Run calibrated model and evaluate against flux tower ET and SSEBop NHM.
 
     Both SWIM and SSEBop are scored on the exact same set of days per site
@@ -230,16 +175,6 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
     """
     fids = apply_exclusions(fids)
     print(f"Evaluating {len(fids)} fields from {par_csv}")
-
-    # Load irrigation data from container
-    if no_mask:
-        irr_data = {}
-    else:
-        try:
-            dynamics = container.export._get_dynamics_dict(fids)
-            irr_data = dynamics.get("irr", {})
-        except Exception:
-            irr_data = {}
 
     calibrated_params = parse_pest_params(par_csv, fids)
     missing = [f for f in fids if f not in calibrated_params]
@@ -270,10 +205,7 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
         swim_vals = swim_et.loc[common].values
 
         # SSEBop NHM ET (interpolated ETf × ETo)
-        if no_mask:
-            etf_series = load_ssebop_etf_no_mask(container, fid)
-        else:
-            etf_series = load_ssebop_etf(container, fid, irr_data)
+        etf_series = load_ssebop_etf(container, fid)
         if etf_series is not None:
             etf_interp = etf_series.interpolate(method="linear")
             ssebop_et = etf_interp * etref
@@ -339,43 +271,15 @@ def evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=False):
     return metrics_df
 
 
-def _monthly_sum(daily_series, max_interp=5):
-    """Resample daily series to monthly sums, interpolating up to max_interp gaps per month.
-
-    Returns monthly Series with NaN for months that had more than max_interp missing days.
-    """
-    monthly = daily_series.resample("MS").apply(lambda grp: _interp_and_sum(grp, max_interp))
-    return monthly
-
-
-def _interp_and_sum(grp, max_interp):
-    """Interpolate up to max_interp NaNs in a month, then sum. Return NaN if too many gaps."""
-    n_missing = grp.isna().sum()
-    if n_missing > max_interp:
-        return np.nan
-    if n_missing > 0:
-        grp = grp.interpolate(method="linear", limit=max_interp)
-    return grp.sum()
-
-
-def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_mask=False):
+def evaluate_monthly(cfg, container, par_csv, fids, flux_dir):
     """Monthly aggregation of ET evaluation with strictly paired months.
 
-    Resamples daily ET to monthly totals (mm/month), interpolating up to
-    max_interp missing flux days per month before summing. Both SWIM and SSEBop
-    are scored on the exact same set of months per site (paired evaluation).
+    Intersects daily indices first, then aggregates to monthly sums. Only
+    months with at least 20 valid daily flux observations are kept. Both SWIM
+    and SSEBop are scored on the exact same set of months per site.
     """
     fids = apply_exclusions(fids)
     print(f"Monthly evaluation: {len(fids)} fields from {par_csv}")
-
-    if no_mask:
-        irr_data = {}
-    else:
-        try:
-            dynamics = container.export._get_dynamics_dict(fids)
-            irr_data = dynamics.get("irr", {})
-        except Exception:
-            irr_data = {}
 
     calibrated_params = parse_pest_params(par_csv, fids)
     missing = [f for f in fids if f not in calibrated_params]
@@ -395,53 +299,53 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
         swim_et = model_df["et_act"]
         etref = model_df["etref"]
 
-        # Build aligned daily frame on common dates
-        common_dates = swim_et.index.intersection(flux_et.index)
-        if len(common_dates) < 30:
+        # Intersect daily indices first, then aggregate to monthly
+        daily_common = swim_et.index.intersection(flux_et.index)
+        if len(daily_common) < 30:
             continue
 
-        # Full daily index spanning the overlap
-        full_idx = pd.date_range(common_dates.min(), common_dates.max(), freq="D")
-        flux_daily = flux_et.reindex(full_idx)
-        swim_daily = swim_et.reindex(full_idx)
+        swim_daily = swim_et.loc[daily_common]
+        flux_daily = flux_et.loc[daily_common]
 
-        # Monthly sums (ET) with interpolation limit on flux
-        flux_monthly = _monthly_sum(flux_daily, max_interp)
+        # Aggregate to monthly totals
         swim_monthly = swim_daily.resample("MS").sum()
+        flux_monthly = flux_daily.resample("MS").sum()
 
-        # SSEBop monthly ET
-        if no_mask:
-            etf_series = load_ssebop_etf_no_mask(container, fid)
-        else:
-            etf_series = load_ssebop_etf(container, fid, irr_data)
+        # Only keep months with >= 20 valid daily flux obs
+        flux_count = flux_daily.resample("MS").count()
+        valid_months = flux_count[flux_count >= 20].index
+        swim_monthly = swim_monthly.loc[swim_monthly.index.isin(valid_months)]
+        flux_monthly = flux_monthly.loc[flux_monthly.index.isin(valid_months)]
+
+        # SSEBop monthly ET on the same daily common index
+        etf_series = load_ssebop_etf(container, fid)
         if etf_series is not None:
-            etf_interp = etf_series.reindex(full_idx).interpolate(method="linear")
-            ssebop_daily = etf_interp * etref.reindex(full_idx)
+            etf_interp = etf_series.reindex(daily_common).interpolate(method="linear")
+            ssebop_daily = etf_interp * etref.reindex(daily_common)
             ssebop_monthly = ssebop_daily.resample("MS").sum()
         else:
             ssebop_monthly = pd.Series(np.nan, index=swim_monthly.index)
 
-        # Strictly paired months: all three (flux, swim, ssebop) must be finite
-        all_months = flux_monthly.index.union(swim_monthly.index).union(ssebop_monthly.index)
-        flux_vals = flux_monthly.reindex(all_months)
-        swim_vals = swim_monthly.reindex(all_months)
-        ssebop_vals = ssebop_monthly.reindex(all_months)
-
-        paired_mask = flux_vals.notna() & swim_vals.notna() & ssebop_vals.notna()
-        paired_months = all_months[paired_mask]
+        # Strictly paired months: flux, swim, and ssebop all finite
+        all_idx = flux_monthly.index
+        ssebop_on_idx = ssebop_monthly.reindex(all_idx)
+        paired_mask = (
+            flux_monthly.notna() & swim_monthly.reindex(all_idx).notna() & ssebop_on_idx.notna()
+        )
+        paired_months = all_idx[paired_mask]
         n_paired = len(paired_months)
 
         if n_paired < 6:
             continue
 
-        obs = flux_vals.loc[paired_months].values
+        obs = flux_monthly.loc[paired_months].values
         row = {"fid": fid, "n_months": n_paired}
 
-        m = calc_metrics(obs, swim_vals.loc[paired_months].values)
+        m = calc_metrics(obs, swim_monthly.reindex(paired_months).values)
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_swim"] = m[k]
 
-        m = calc_metrics(obs, ssebop_vals.loc[paired_months].values)
+        m = calc_metrics(obs, ssebop_on_idx.loc[paired_months].values)
         for k in ["r2", "r", "rmse", "bias"]:
             row[f"{k}_ssebop"] = m[k]
 
@@ -481,7 +385,7 @@ def evaluate_monthly(cfg, container, par_csv, fids, flux_dir, max_interp=5, no_m
     return metrics_df
 
 
-def evaluate_etf(cfg, container, par_csv, fids, no_mask=False):
+def evaluate_etf(cfg, container, par_csv, fids):
     """Compare SWIM ETf against SSEBop NHM ETf at Landsat capture dates.
 
     Isolates model skill from ETo conversion issues by comparing ETf directly.
@@ -494,26 +398,13 @@ def evaluate_etf(cfg, container, par_csv, fids, no_mask=False):
     calibrated_params = parse_pest_params(par_csv, fids)
     model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
 
-    # Load irrigation data for mask selection
-    if no_mask:
-        irr_data = {}
-    else:
-        try:
-            dynamics = container.export._get_dynamics_dict(fids)
-            irr_data = dynamics.get("irr", {})
-        except Exception:
-            irr_data = {}
-
     rows = []
     for fid in fids:
         if fid not in model_results:
             continue
         swim_etf = model_results[fid]["etf_model"]
 
-        if no_mask:
-            etf_series = load_ssebop_etf_no_mask(container, fid)
-        else:
-            etf_series = load_ssebop_etf(container, fid, irr_data)
+        etf_series = load_ssebop_etf(container, fid)
         if etf_series is None:
             continue
 
@@ -598,11 +489,6 @@ if __name__ == "__main__":
         default=None,
         help="Override container path (default: derived from config)",
     )
-    parser.add_argument(
-        "--no-mask",
-        action="store_true",
-        help="Use no_mask ETf (full footprint) instead of irr/inv_irr switching",
-    )
     args = parser.parse_args()
 
     cfg = load_config()
@@ -631,15 +517,13 @@ if __name__ == "__main__":
 
     try:
         if args.monthly:
-            metrics = evaluate_monthly(
-                cfg, container, par_csv, fids, flux_dir, no_mask=args.no_mask
-            )
+            metrics = evaluate_monthly(cfg, container, par_csv, fids, flux_dir)
             out_csv = os.path.join(results_dir, "evaluation_monthly_metrics.csv")
         elif args.etf:
-            metrics = evaluate_etf(cfg, container, par_csv, fids, no_mask=args.no_mask)
+            metrics = evaluate_etf(cfg, container, par_csv, fids)
             out_csv = os.path.join(results_dir, "evaluation_etf_metrics.csv")
         else:
-            metrics = evaluate(cfg, container, par_csv, fids, flux_dir, no_mask=args.no_mask)
+            metrics = evaluate(cfg, container, par_csv, fids, flux_dir)
             out_csv = os.path.join(results_dir, "evaluation_metrics.csv")
         os.makedirs(results_dir, exist_ok=True)
         metrics.to_csv(out_csv)
