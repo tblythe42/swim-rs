@@ -341,6 +341,7 @@ class Exporter(Component):
         start_date: str | None = None,
         end_date: str | None = None,
         ensemble_source: str | None = None,
+        ensemble_members: list[str] | None = None,
     ) -> ProvenanceEvent:
         """
         Export observation files for model calibration.
@@ -399,16 +400,20 @@ class Exporter(Component):
                                 end_date=end_date,
                             )
                 else:
-                    # Compute mean across all individual models (DIY)
+                    # Compute mean across individual models (DIY).
+                    # Use frozen member list if provided, else discover from container.
                     import xarray as xr
 
                     etf_prefix = f"remote_sensing/etf/{etf_instrument}"
-                    model_names: list[str] = []
-                    if etf_prefix in self._state.root:
-                        try:
-                            model_names = sorted(self._state.root[etf_prefix].keys())
-                        except Exception:
-                            model_names = []
+                    if ensemble_members:
+                        model_names = list(ensemble_members)
+                    else:
+                        model_names = []
+                        if etf_prefix in self._state.root:
+                            try:
+                                model_names = sorted(self._state.root[etf_prefix].keys())
+                            except Exception:
+                                model_names = []
 
                     for mask in masks:
                         model_arrays = []

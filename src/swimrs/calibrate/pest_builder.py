@@ -222,8 +222,22 @@ class PestBuilder:
                         if fid in df.columns:
                             result[f"ensemble_etf_{mask}"] = df[fid]
             else:
-                # Compute ensemble mean from individual models (DIY)
-                available_models = self._discover_etf_models()
+                # Compute ensemble mean from the frozen config member list.
+                # Use etf_ensemble_members from config, not auto-discovery,
+                # so the target cannot drift with container contents.
+                configured_members = getattr(self.config, "etf_ensemble_members", None)
+                if configured_members:
+                    available_models = [
+                        m
+                        for m in configured_members
+                        if any(
+                            f"remote_sensing/etf/{self.etf_instrument}/{m}/{mask}"
+                            in self._container.state.root
+                            for mask in self.masks
+                        )
+                    ]
+                else:
+                    available_models = self._discover_etf_models()
                 if not available_models:
                     return result
 
@@ -541,6 +555,7 @@ class PestBuilder:
         )
 
         ensemble_source = getattr(self.config, "ensemble_source", "computed")
+        ensemble_members = getattr(self.config, "etf_ensemble_members", None)
 
         try:
             self._container.export.observations(
@@ -553,6 +568,7 @@ class PestBuilder:
                 start_date=start_date,
                 end_date=end_date,
                 ensemble_source=ensemble_source,
+                ensemble_members=ensemble_members,
             )
         except Exception as e:
             raise RuntimeError(f"Failed to export observations to {obs_dir}: {e}") from e
@@ -1334,15 +1350,21 @@ if __name__ == "__main__":
 
             if not captures_for_this_df.empty and total_valid_obs > 0:
                 obsvals = d.loc[captures_for_this_df, "obsval"].values
+
+                # Build common eligibility mask from member count so that
+                # both spread and fixed_sd modes use the same capture dates.
+                if self.etf_std is not None and self.etf_std.get(fid) is not None:
+                    ct_vals = self.etf_std[fid].loc[capture_dates, "ct"].values
+                    eligible = ct_vals >= min_members
+                else:
+                    eligible = np.ones(len(obsvals), dtype=bool)
+
                 if (
                     weighting_mode == "spread"
                     and self.etf_std is not None
                     and self.etf_std.get(fid) is not None
                 ):
                     std_vals = self.etf_std[fid].loc[capture_dates, "std"].values
-                    ct_vals = self.etf_std[fid].loc[capture_dates, "ct"].values
-                    # Zero out weight where fewer than min_members contributed
-                    eligible = ct_vals >= min_members
                     weights = np.where(
                         eligible,
                         obsvals / (std_vals + spread_floor),
@@ -1350,7 +1372,8 @@ if __name__ == "__main__":
                     )
                     d.loc[captures_for_this_df, "weight"] = weights
                 else:
-                    d.loc[captures_for_this_df, "weight"] = obsvals / fixed_sd
+                    weights = np.where(eligible, obsvals / fixed_sd, 0.0)
+                    d.loc[captures_for_this_df, "weight"] = weights
 
             d.loc[d["obsval"].isna(), "obsval"] = -99.0
             d.loc[d["weight"].isna(), "weight"] = 0.0

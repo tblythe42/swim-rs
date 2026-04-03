@@ -88,8 +88,12 @@ def run_calibration(cfg, experiment_id, experiment_spec, results_dir, debug_fiel
     return elapsed
 
 
-def run_evaluation(cfg, experiment_id, results_dir, monthly=False):
-    """Run canonical evaluation for one experiment."""
+def run_evaluation(cfg, experiment_id, results_dir, monthly=False, debug_fields=None):
+    """Run canonical evaluation for one experiment.
+
+    Uses openet_source="volk" for daily evaluation per Ex5 validation policy.
+    When debug_fields is set, limits evaluation to that subset only.
+    """
     from evaluate import evaluate, evaluate_monthly, load_config
 
     from swimrs.container import SwimContainer
@@ -105,7 +109,11 @@ def run_evaluation(cfg, experiment_id, results_dir, monthly=False):
     container_path = os.path.join(cfg.data_dir, f"{project}.swim")
     container = SwimContainer.open(container_path, mode="r")
     flux_dir = os.path.join(cfg.data_dir, "daily_flux_files")
-    fids = container.field_uids
+
+    if debug_fields is not None:
+        fids = [f for f in debug_fields if f in container.field_uids]
+    else:
+        fids = container.field_uids
 
     eval_cfg = load_config()
 
@@ -114,7 +122,7 @@ def run_evaluation(cfg, experiment_id, results_dir, monthly=False):
             metrics = evaluate_monthly(eval_cfg, container, par_csv, fids, flux_dir)
             out_csv = os.path.join(results_dir, "evaluation_monthly_metrics.csv")
         else:
-            metrics = evaluate(eval_cfg, container, par_csv, fids, flux_dir)
+            metrics = evaluate(eval_cfg, container, par_csv, fids, flux_dir, openet_source="volk")
             out_csv = os.path.join(results_dir, "evaluation_metrics.csv")
         metrics.to_csv(out_csv)
         print(f"  {experiment_id} {'monthly' if monthly else 'daily'} metrics -> {out_csv}")
@@ -258,8 +266,8 @@ def main():
             print(f"  Skipping evaluation for {exp_id} (no results dir)")
             continue
         print(f"\nEvaluating {exp_id}...")
-        run_evaluation(cfg, exp_id, exp_dir, monthly=False)
-        run_evaluation(cfg, exp_id, exp_dir, monthly=True)
+        run_evaluation(cfg, exp_id, exp_dir, monthly=False, debug_fields=debug_fields)
+        run_evaluation(cfg, exp_id, exp_dir, monthly=True, debug_fields=debug_fields)
 
     # Phase 3: Summary
     print("\nSummarizing ablation...")
