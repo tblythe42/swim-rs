@@ -118,6 +118,7 @@ class PestBuilder:
         self.pest = None
         self.etf_std = None
         self.etf_capture_indexes = []
+        self._weight_audit_rows = []
 
         self.params_file = os.path.join(self.pest_run_dir, "params.csv")
 
@@ -521,6 +522,31 @@ class PestBuilder:
 
         if self.verbose:
             print("Configured PEST++ for {} targets, ".format(len(self.pest_args["targets"])))
+
+    def export_weight_audit(self, output_path: str) -> None:
+        """Write per-observation weight audit CSV for ablation diagnostics.
+
+        Must be called after build_pest(). Contains one row per ETf capture
+        date per site with obsval, member spread, eligibility, and final weight.
+        """
+        if not self._weight_audit_rows:
+            return
+        df = pd.DataFrame(self._weight_audit_rows)
+        col_order = [
+            "fid",
+            "date",
+            "obsval",
+            "member_count",
+            "member_mean",
+            "member_std",
+            "weight_mode",
+            "weight",
+            "eligible",
+        ]
+        df = df[[c for c in col_order if c in df.columns]]
+        df.to_csv(output_path, index=False)
+        if self.verbose:
+            print(f"Weight audit: {len(df)} rows -> {output_path}")
 
     def _export_observations(self, etf_model: str) -> None:
         """Export ETf/SWE observation arrays for PstFrom from the SwimContainer.
@@ -1374,6 +1400,32 @@ if __name__ == "__main__":
                 else:
                     weights = np.where(eligible, obsvals / fixed_sd, 0.0)
                     d.loc[captures_for_this_df, "weight"] = weights
+
+            # Collect weight audit rows for ablation diagnostics
+            if not captures_for_this_df.empty and total_valid_obs > 0:
+                dates = self.observation_index[fid].loc[captures_for_this_df, "obs_idx"]
+                time_idx = pd.date_range(self.config.start_dt, self.config.end_dt, freq="D")
+                for j_cap, (obs_id, date_idx) in enumerate(zip(captures_for_this_df, dates)):
+                    row = {
+                        "fid": fid,
+                        "date": time_idx[date_idx].strftime("%Y-%m-%d")
+                        if date_idx < len(time_idx)
+                        else str(date_idx),
+                        "obsval": obsvals[j_cap],
+                        "weight_mode": weighting_mode,
+                        "weight": d.loc[obs_id, "weight"],
+                        "eligible": bool(eligible[j_cap]),
+                    }
+                    if self.etf_std is not None and self.etf_std.get(fid) is not None:
+                        std_df = self.etf_std[fid]
+                        row["member_count"] = int(std_df.loc[date_idx, "ct"])
+                        row["member_mean"] = float(std_df.loc[date_idx, "mean"])
+                        row["member_std"] = float(std_df.loc[date_idx, "std"])
+                    else:
+                        row["member_count"] = 0
+                        row["member_mean"] = np.nan
+                        row["member_std"] = np.nan
+                    self._weight_audit_rows.append(row)
 
             d.loc[d["obsval"].isna(), "obsval"] = -99.0
             d.loc[d["weight"].isna(), "weight"] = 0.0

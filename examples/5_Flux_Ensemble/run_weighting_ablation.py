@@ -88,21 +88,28 @@ def run_calibration(cfg, experiment_id, experiment_spec, results_dir, debug_fiel
     return elapsed
 
 
-def run_evaluation(cfg, experiment_id, results_dir, monthly=False, debug_fields=None):
+def _find_par_csv(results_dir, project):
+    """Find the highest-iteration par.csv in a results directory."""
+    for i in range(10, -1, -1):
+        candidate = os.path.join(results_dir, f"{project}.{i}.par.csv")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def run_evaluation(cfg, experiment_id, results_dir, mode="daily", debug_fields=None):
     """Run canonical evaluation for one experiment.
 
-    Uses openet_source="volk" for daily evaluation per Ex5 validation policy.
+    mode: 'daily' (volk source), 'monthly', or 'etf'.
     When debug_fields is set, limits evaluation to that subset only.
     """
-    from evaluate import evaluate, evaluate_monthly, load_config
+    from evaluate import evaluate, evaluate_etf, evaluate_monthly, load_config
 
     from swimrs.container import SwimContainer
 
     project = cfg.project_name
-    par_csv = os.path.join(results_dir, f"{project}.3.par.csv")
-    if not os.path.exists(par_csv):
-        par_csv = os.path.join(results_dir, f"{project}.2.par.csv")
-    if not os.path.exists(par_csv):
+    par_csv = _find_par_csv(results_dir, project)
+    if par_csv is None:
         print(f"  WARNING: no par.csv found in {results_dir}, skipping evaluation")
         return
 
@@ -118,94 +125,230 @@ def run_evaluation(cfg, experiment_id, results_dir, monthly=False, debug_fields=
     eval_cfg = load_config()
 
     try:
-        if monthly:
+        if mode == "monthly":
             metrics = evaluate_monthly(eval_cfg, container, par_csv, fids, flux_dir)
             out_csv = os.path.join(results_dir, "evaluation_monthly_metrics.csv")
+        elif mode == "etf":
+            metrics = evaluate_etf(eval_cfg, container, par_csv, fids)
+            out_csv = os.path.join(results_dir, "evaluation_etf_metrics.csv")
         else:
             metrics = evaluate(eval_cfg, container, par_csv, fids, flux_dir, openet_source="volk")
             out_csv = os.path.join(results_dir, "evaluation_metrics.csv")
         metrics.to_csv(out_csv)
-        print(f"  {experiment_id} {'monthly' if monthly else 'daily'} metrics -> {out_csv}")
+        print(f"  {experiment_id} {mode} metrics -> {out_csv}")
     finally:
         container.close()
 
 
-def summarize_ablation(results_root):
-    """Produce paired comparison between E1 and E2."""
+def _build_paired_deltas(e1_path, e2_path, summary_dir, label):
+    """Build paired delta CSV for one timescale/evaluation mode."""
     import pandas as pd
 
+    if not os.path.exists(e1_path) or not os.path.exists(e2_path):
+        print(f"  Skipping {label} comparison (missing files)")
+        return None, None
+
+    e1 = pd.read_csv(e1_path, index_col=0)
+    e2 = pd.read_csv(e2_path, index_col=0)
+    common = e1.index.intersection(e2.index)
+    e1, e2 = e1.loc[common], e2.loc[common]
+
+    paired = pd.DataFrame(index=common)
+    for metric in ["r2_swim", "rmse_swim", "bias_swim", "r2", "rmse", "bias"]:
+        e1_col = metric if metric in e1.columns else None
+        e2_col = metric if metric in e2.columns else None
+        if e1_col and e2_col:
+            paired[f"e1_{metric}"] = e1[metric]
+            paired[f"e2_{metric}"] = e2[metric]
+            paired[f"delta_{metric}"] = e1[metric] - e2[metric]
+
+    r2_col = "r2_swim" if "r2_swim" in e1.columns else ("r2" if "r2" in e1.columns else None)
+    if r2_col:
+        paired["e1_wins_r2"] = e1[r2_col] > e2[r2_col]
+        if "n" in e1.columns:
+            paired["n_paired"] = e1["n"]
+
+    out_path = os.path.join(summary_dir, f"paired_site_deltas_{label}.csv")
+    paired.to_csv(out_path)
+    print(f"  Paired deltas ({label}): {out_path}")
+    return e1, e2
+
+
+def _build_weight_summary(exp_dir, summary_dir, exp_id):
+    """Build per-site weight summary from weight audit CSV."""
+    import pandas as pd
+
+    audit_path = os.path.join(exp_dir, "etf_weight_audit.csv")
+    if not os.path.exists(audit_path):
+        return
+    audit = pd.read_csv(audit_path)
+    if audit.empty:
+        return
+
+    grouped = audit.groupby("fid")
+    rows = []
+    total_weight_all = audit.loc[audit["weight"] > 0, "weight"].sum()
+    for fid, grp in grouped:
+        nonzero = grp[grp["weight"] > 0]
+        rows.append(
+            {
+                "fid": fid,
+                "n_captures": len(grp),
+                "n_eligible": int(grp["eligible"].sum()),
+                "n_nonzero_weight": len(nonzero),
+                "total_weight": nonzero["weight"].sum(),
+                "weight_share": nonzero["weight"].sum() / total_weight_all
+                if total_weight_all > 0
+                else 0,
+                "mean_weight": nonzero["weight"].mean() if len(nonzero) > 0 else 0,
+                "max_weight": nonzero["weight"].max() if len(nonzero) > 0 else 0,
+                "mean_member_std": grp["member_std"].mean(),
+            }
+        )
+
+    df = pd.DataFrame(rows).set_index("fid")
+    out_path = os.path.join(summary_dir, f"etf_weight_summary_by_site_{exp_id}.csv")
+    df.to_csv(out_path)
+    print(f"  Weight summary ({exp_id}): {out_path}")
+
+
+def _build_phi_summary(results_root, summary_dir):
+    """Parse phi.meas.csv from both runs and write phi_summary.csv."""
+    import pandas as pd
+
+    rows = []
+    for exp_id, tag in [
+        ("e1_spread", "ablation_e1_spread"),
+        ("e2_fixed_sd", "ablation_e2_fixed_sd"),
+    ]:
+        exp_dir = os.path.join(results_root, tag)
+        phi_path = os.path.join(exp_dir, "5_Flux_Ensemble.phi.meas.csv")
+        rt_path = os.path.join(exp_dir, "runtime.json")
+
+        if not os.path.exists(phi_path):
+            continue
+
+        phi = pd.read_csv(phi_path, index_col=0)
+        # phi.meas.csv: rows are realizations, columns are iterations
+        # Mean phi per iteration
+        iter_means = phi.mean(axis=0)
+        row = {"experiment_id": exp_id}
+        for j, val in enumerate(iter_means):
+            row[f"phi_iter_{j}"] = round(float(val), 1)
+        row["phi_initial"] = round(float(iter_means.iloc[0]), 1)
+        row["phi_final"] = round(float(iter_means.iloc[-1]), 1)
+        row["phi_reduction_pct"] = (
+            round(100 * (1 - iter_means.iloc[-1] / iter_means.iloc[0]), 1)
+            if iter_means.iloc[0] > 0
+            else 0
+        )
+        row["n_iterations"] = len(iter_means)
+
+        if os.path.exists(rt_path):
+            with open(rt_path) as f:
+                rt = json.load(f)
+            row["wall_minutes"] = rt.get("wall_minutes", None)
+
+        rows.append(row)
+
+    if rows:
+        df = pd.DataFrame(rows)
+        out_path = os.path.join(summary_dir, "phi_summary.csv")
+        df.to_csv(out_path, index=False)
+        print(f"  Phi summary: {out_path}")
+
+
+def _build_ablation_summary(results_root, summary_dir):
+    """Build single ablation_summary.csv with one row per experiment."""
+    import pandas as pd
+
+    rows = []
+    for exp_id, tag in [
+        ("e1_spread", "ablation_e1_spread"),
+        ("e2_fixed_sd", "ablation_e2_fixed_sd"),
+    ]:
+        exp_dir = os.path.join(results_root, tag)
+        row = {"experiment_id": exp_id}
+
+        # Runtime
+        rt_path = os.path.join(exp_dir, "runtime.json")
+        if os.path.exists(rt_path):
+            with open(rt_path) as f:
+                rt = json.load(f)
+            row.update(
+                {
+                    k: rt[k]
+                    for k in ["weighting_mode", "realizations", "workers", "wall_minutes"]
+                    if k in rt
+                }
+            )
+
+        # Daily metrics
+        daily_path = os.path.join(exp_dir, "evaluation_metrics.csv")
+        if os.path.exists(daily_path):
+            d = pd.read_csv(daily_path, index_col=0)
+            valid = d["r2_swim"].dropna()
+            row["daily_n_sites"] = len(valid)
+            row["daily_r2_median"] = round(valid.median(), 3)
+            row["daily_rmse_median"] = round(d["rmse_swim"].dropna().median(), 3)
+            row["daily_bias_median"] = round(d["bias_swim"].dropna().median(), 3)
+
+        # Monthly metrics
+        monthly_path = os.path.join(exp_dir, "evaluation_monthly_metrics.csv")
+        if os.path.exists(monthly_path):
+            m = pd.read_csv(monthly_path, index_col=0)
+            valid = m["r2_swim"].dropna()
+            row["monthly_n_sites"] = len(valid)
+            row["monthly_r2_median"] = round(valid.median(), 3)
+            row["monthly_rmse_median"] = round(m["rmse_swim"].dropna().median(), 2)
+            row["monthly_bias_median"] = round(m["bias_swim"].dropna().median(), 2)
+
+        # Phi
+        phi_path = os.path.join(exp_dir, "5_Flux_Ensemble.phi.meas.csv")
+        if os.path.exists(phi_path):
+            phi = pd.read_csv(phi_path, index_col=0)
+            iter_means = phi.mean(axis=0)
+            row["phi_initial"] = round(float(iter_means.iloc[0]), 1)
+            row["phi_final"] = round(float(iter_means.iloc[-1]), 1)
+
+        rows.append(row)
+
+    if rows:
+        df = pd.DataFrame(rows)
+        out_path = os.path.join(summary_dir, "ablation_summary.csv")
+        df.to_csv(out_path, index=False)
+        print(f"  Ablation summary: {out_path}")
+
+
+def summarize_ablation(results_root):
+    """Produce all paired comparison and diagnostic artifacts for E1 vs E2."""
     e1_dir = os.path.join(results_root, "ablation_e1_spread")
     e2_dir = os.path.join(results_root, "ablation_e2_fixed_sd")
     summary_dir = os.path.join(results_root, "ablation_summary")
     os.makedirs(summary_dir, exist_ok=True)
 
-    for timescale in ["daily", "monthly"]:
-        suffix = "_monthly_metrics.csv" if timescale == "monthly" else "_metrics.csv"
-        e1_path = os.path.join(e1_dir, f"evaluation{suffix}")
-        e2_path = os.path.join(e2_dir, f"evaluation{suffix}")
+    # Paired deltas: daily, monthly, ETf
+    for label, suffix in [
+        ("daily", "_metrics.csv"),
+        ("monthly", "_monthly_metrics.csv"),
+        ("etf", "_etf_metrics.csv"),
+    ]:
+        _build_paired_deltas(
+            os.path.join(e1_dir, f"evaluation{suffix}"),
+            os.path.join(e2_dir, f"evaluation{suffix}"),
+            summary_dir,
+            label,
+        )
 
-        if not os.path.exists(e1_path) or not os.path.exists(e2_path):
-            print(f"  Skipping {timescale} comparison (missing files)")
-            continue
+    # Per-site weight summaries
+    _build_weight_summary(e1_dir, summary_dir, "e1_spread")
+    _build_weight_summary(e2_dir, summary_dir, "e2_fixed_sd")
 
-        e1 = pd.read_csv(e1_path, index_col=0)
-        e2 = pd.read_csv(e2_path, index_col=0)
+    # Phi convergence summary
+    _build_phi_summary(results_root, summary_dir)
 
-        common = e1.index.intersection(e2.index)
-        e1 = e1.loc[common]
-        e2 = e2.loc[common]
-
-        # Build paired delta table
-        paired = pd.DataFrame(index=common)
-        for metric in ["r2_swim", "rmse_swim", "bias_swim"]:
-            if metric in e1.columns and metric in e2.columns:
-                paired[f"e1_{metric}"] = e1[metric]
-                paired[f"e2_{metric}"] = e2[metric]
-                paired[f"delta_{metric}"] = e1[metric] - e2[metric]
-
-        if "r2_swim" in e1.columns:
-            paired["e1_wins_r2"] = e1["r2_swim"] > e2["r2_swim"]
-
-        out_path = os.path.join(summary_dir, f"paired_site_deltas_{timescale}.csv")
-        paired.to_csv(out_path)
-        print(f"  Paired deltas ({timescale}): {out_path}")
-
-        # Aggregate summary
-        has_both = e1["r2_swim"].notna() & e2["r2_swim"].notna()
-        n = has_both.sum()
-        if n > 0:
-            e1_wins = (e1.loc[has_both, "r2_swim"] > e2.loc[has_both, "r2_swim"]).sum()
-            print(f"\n  {timescale.upper()} SUMMARY ({n} paired sites):")
-            print(
-                f"    E1 (spread):   med R2={e1.loc[has_both, 'r2_swim'].median():.3f}  "
-                f"med RMSE={e1.loc[has_both, 'rmse_swim'].median():.3f}"
-            )
-            print(
-                f"    E2 (fixed_sd): med R2={e2.loc[has_both, 'r2_swim'].median():.3f}  "
-                f"med RMSE={e2.loc[has_both, 'rmse_swim'].median():.3f}"
-            )
-            print(f"    E1 win rate: {e1_wins}/{n} = {100 * e1_wins / n:.0f}%")
-
-    # Phi comparison
-    for exp_id, exp_dir in [("e1_spread", e1_dir), ("e2_fixed_sd", e2_dir)]:
-        phi_path = os.path.join(exp_dir, "5_Flux_Ensemble.phi.meas.csv")
-        if os.path.exists(phi_path):
-            phi = pd.read_csv(phi_path)
-            print(f"\n  PHI ({exp_id}): columns={list(phi.columns)[:5]}")
-
-    # Runtime comparison
-    rows = []
-    for exp_id, exp_dir in [("e1_spread", e1_dir), ("e2_fixed_sd", e2_dir)]:
-        rt_path = os.path.join(exp_dir, "runtime.json")
-        if os.path.exists(rt_path):
-            with open(rt_path) as f:
-                rt = json.load(f)
-            rows.append(rt)
-    if rows:
-        rt_df = pd.DataFrame(rows)
-        rt_path = os.path.join(summary_dir, "runtime_comparison.csv")
-        rt_df.to_csv(rt_path, index=False)
-        print(f"\n  Runtime comparison: {rt_path}")
+    # One-row-per-experiment ablation summary
+    _build_ablation_summary(results_root, summary_dir)
 
 
 def main():
@@ -259,15 +402,16 @@ def main():
             exp_dir = os.path.join(results_root, f"ablation_{exp_id}")
             run_calibration(cfg, exp_id, EXPERIMENTS[exp_id], exp_dir, debug_fields)
 
-    # Phase 2: Evaluation (daily + monthly)
+    # Phase 2: Evaluation (daily + monthly + ETf)
     for exp_id in run_ids:
         exp_dir = os.path.join(results_root, f"ablation_{exp_id}")
         if not os.path.exists(exp_dir):
             print(f"  Skipping evaluation for {exp_id} (no results dir)")
             continue
         print(f"\nEvaluating {exp_id}...")
-        run_evaluation(cfg, exp_id, exp_dir, monthly=False, debug_fields=debug_fields)
-        run_evaluation(cfg, exp_id, exp_dir, monthly=True, debug_fields=debug_fields)
+        run_evaluation(cfg, exp_id, exp_dir, mode="daily", debug_fields=debug_fields)
+        run_evaluation(cfg, exp_id, exp_dir, mode="monthly", debug_fields=debug_fields)
+        run_evaluation(cfg, exp_id, exp_dir, mode="etf", debug_fields=debug_fields)
 
     # Phase 3: Summary
     print("\nSummarizing ablation...")

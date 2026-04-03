@@ -91,6 +91,7 @@ def run_pest_sequence(
     shutil.copyfile(builder.config.spinup, os.path.join(results_dir, "spinup.json"))
 
     builder.build_pest(target_etf=cfg.etf_target_model, members=cfg.etf_ensemble_members)
+    builder.export_weight_audit(os.path.join(results_dir, "etf_weight_audit.csv"))
     builder.build_localizer()
 
     exe_ = "pestpp-ies"
