@@ -148,8 +148,16 @@ def _build_paired_deltas(e1_path, e2_path, summary_dir, label):
         print(f"  Skipping {label} comparison (missing files)")
         return None, None
 
-    e1 = pd.read_csv(e1_path, index_col=0)
-    e2 = pd.read_csv(e2_path, index_col=0)
+    # ETf CSVs have a MultiIndex (fid, model); daily/monthly have fid only.
+    with open(e1_path) as f:
+        header = f.readline().strip().split(",")
+    if "model" in header:
+        idx_cols = [header.index("fid"), header.index("model")]
+    else:
+        idx_cols = 0
+
+    e1 = pd.read_csv(e1_path, index_col=idx_cols)
+    e2 = pd.read_csv(e2_path, index_col=idx_cols)
     common = e1.index.intersection(e2.index)
     e1, e2 = e1.loc[common], e2.loc[common]
 
