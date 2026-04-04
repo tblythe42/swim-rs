@@ -1,0 +1,93 @@
+# Ex4 Ablation Experiment Registry — Study 1
+#
+# Frozen 2026-04-03. Do not edit experiment windows without updating the
+# manuscript plan at examples/ablation_plan.md.
+
+meta:
+  study: 1
+  description: "Ex4 ablation: period-of-record, Sentinel-2 NDVI, compute efficiency"
+  frozen_date: "2026-04-03"
+  base_config: "../4_Flux_Network.toml"
+
+container_families:
+  ls_only:
+    add_sentinel: false
+    merged_ndvi_instruments: ["landsat"]
+    description: "Landsat-only NDVI (baseline for P1, P2, S1, C1, C2)"
+  ls_s2_fused:
+    add_sentinel: true
+    merged_ndvi_instruments: ["landsat", "sentinel"]
+    description: "Landsat + Sentinel-2 fused NDVI (S2 only)"
+
+experiments:
+  P1:
+    question: period
+    calibration_start: "1987-01-01"
+    calibration_end: "2023-12-31"
+    evaluation_start: "2016-01-01"
+    evaluation_end: "2023-12-31"
+    container_family: ls_only
+    realizations: 200
+    site_filter: all
+
+  P2:
+    question: period
+    calibration_start: "2016-01-01"
+    calibration_end: "2023-12-31"
+    evaluation_start: "2016-01-01"
+    evaluation_end: "2023-12-31"
+    container_family: ls_only
+    realizations: 200
+    site_filter: all
+
+  S1:
+    question: sentinel
+    calibration_start: "2018-01-01"
+    calibration_end: "2023-12-31"
+    evaluation_start: "2018-01-01"
+    evaluation_end: "2023-12-31"
+    container_family: ls_only
+    realizations: 200
+    site_filter: s2_sites
+
+  S2:
+    question: sentinel
+    calibration_start: "2018-01-01"
+    calibration_end: "2023-12-31"
+    evaluation_start: "2018-01-01"
+    evaluation_end: "2023-12-31"
+    container_family: ls_s2_fused
+    realizations: 200
+    site_filter: s2_sites
+
+  C1:
+    question: compute
+    calibration_start: "1987-01-01"
+    calibration_end: "2023-12-31"
+    evaluation_start: "2016-01-01"
+    evaluation_end: "2023-12-31"
+    container_family: ls_only
+    realizations: 20
+    site_filter: all
+
+  C2:
+    question: compute
+    calibration_start: "1987-01-01"
+    calibration_end: "2023-12-31"
+    evaluation_start: "2016-01-01"
+    evaluation_end: "2023-12-31"
+    container_family: ls_only
+    realizations: 50
+    site_filter: all
+
+comparisons:
+  period:
+    experiments: [P1, P2]
+    description: "Does 37-year calibration history outperform 8-year?"
+  sentinel:
+    experiments: [S1, S2]
+    description: "Does fusing Sentinel-2 NDVI improve ET skill?"
+    cohort: s2_sites
+  compute:
+    experiments: [C1, C2, P1]
+    description: "Diminishing returns from realization count?"

@@ -91,12 +91,14 @@ def extract_properties(cfg: ProjectConfig) -> None:
     )
 
 
-def extract_ndvi(cfg: ProjectConfig, sites=None, get_sentinel: bool = True) -> None:
+def extract_ndvi(cfg: ProjectConfig, sites=None, get_sentinel: bool = True, masks=None) -> None:
     """Extract NDVI zonal stats for Landsat (and optionally Sentinel)."""
     is_authorized()
     from swimrs.data_extraction.ee.ndvi_export import sparse_sample_ndvi
 
-    for mask in ["irr", "inv_irr", "no_mask"]:
+    if masks is None:
+        masks = ["irr", "inv_irr", "no_mask"]
+    for mask in masks:
         dst = os.path.join(cfg.landsat_dir, "extracts", "ndvi", mask)
         sparse_sample_ndvi(
             cfg.fields_shapefile,
@@ -133,7 +135,7 @@ def extract_ndvi(cfg: ProjectConfig, sites=None, get_sentinel: bool = True) -> N
             )
 
 
-def extract_nhm_ssebop(cfg: ProjectConfig, sites=None) -> None:
+def extract_nhm_ssebop(cfg: ProjectConfig, sites=None, masks=None) -> None:
     """Extract SSEBop NHM ETf from the USGS EE asset.
 
     Uses ``projects/usgs-gee-nhm-ssebop/assets/ssebop/landsat/c02`` with
@@ -143,7 +145,9 @@ def extract_nhm_ssebop(cfg: ProjectConfig, sites=None) -> None:
     is_authorized()
     from ssebop_etf import extract_ssebop_nhm_etf
 
-    for mask in ["irr", "inv_irr", "no_mask"]:
+    if masks is None:
+        masks = ["irr", "inv_irr", "no_mask"]
+    for mask in masks:
         dst = os.path.join(cfg.landsat_dir, "extracts", "ssebop_etf", mask)
         extract_ssebop_nhm_etf(
             cfg.fields_shapefile,
@@ -219,18 +223,25 @@ if __name__ == "__main__":
         default=None,
         help="Comma-separated site IDs (default: all)",
     )
+    parser.add_argument(
+        "--masks",
+        type=str,
+        default=None,
+        help="Comma-separated mask types to extract (default: irr,inv_irr,no_mask)",
+    )
     args = parser.parse_args()
 
     config = _load_config()
     select_sites = [s.strip() for s in args.sites.split(",")] if args.sites else None
+    select_masks = [m.strip() for m in args.masks.split(",")] if args.masks else None
 
     if args.extract in ("all", "snodas"):
         extract_snodas(config)
     if args.extract in ("all", "properties"):
         extract_properties(config)
     if args.extract in ("all", "ndvi"):
-        extract_ndvi(config, select_sites, get_sentinel=True)
+        extract_ndvi(config, select_sites, get_sentinel=True, masks=select_masks)
     if args.extract in ("all", "nhm"):
-        extract_nhm_ssebop(config, select_sites)
+        extract_nhm_ssebop(config, select_sites, masks=select_masks)
     if args.extract in ("all", "gridmet"):
         extract_gridmet(config, select_sites)
