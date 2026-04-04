@@ -171,7 +171,7 @@ def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
         sample_gridmet_corrections,
     )
 
-    nldas_needed = cfg.runoff_process == "ier"
+    nldas_needed = getattr(cfg, "runoff_process", "cn") == "ier"
     join_path = cfg.gridmet_mapping_shp
     factors_path = cfg.gridmet_factors
 

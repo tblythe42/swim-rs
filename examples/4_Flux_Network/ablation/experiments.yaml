@@ -1,12 +1,13 @@
 # Ex4 Ablation Experiment Registry — Study 1
 #
-# Frozen 2026-04-03. Do not edit experiment windows without updating the
-# manuscript plan at examples/ablation_plan.md.
+# Updated 2026-04-04: extended all experiments to 2025-12-31 (SSEBop NHM ETf
+# reproduced via openet-ssebop v0.2.6 for 2024-2025).
+# Do not edit experiment windows without updating the manuscript plan.
 
 meta:
   study: 1
   description: "Ex4 ablation: period-of-record, Sentinel-2 NDVI, compute efficiency"
-  frozen_date: "2026-04-03"
+  frozen_date: "2026-04-04"
   base_config: "../4_Flux_Network.toml"
 
 container_families:
@@ -23,9 +24,9 @@ experiments:
   P1:
     question: period
     calibration_start: "1987-01-01"
-    calibration_end: "2023-12-31"
+    calibration_end: "2025-12-31"
     evaluation_start: "2016-01-01"
-    evaluation_end: "2023-12-31"
+    evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 200
     site_filter: all
@@ -33,9 +34,9 @@ experiments:
   P2:
     question: period
     calibration_start: "2016-01-01"
-    calibration_end: "2023-12-31"
+    calibration_end: "2025-12-31"
     evaluation_start: "2016-01-01"
-    evaluation_end: "2023-12-31"
+    evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 200
     site_filter: all
@@ -43,9 +44,9 @@ experiments:
   S1:
     question: sentinel
     calibration_start: "2018-01-01"
-    calibration_end: "2023-12-31"
+    calibration_end: "2025-12-31"
     evaluation_start: "2018-01-01"
-    evaluation_end: "2023-12-31"
+    evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 200
     site_filter: s2_sites
@@ -53,9 +54,9 @@ experiments:
   S2:
     question: sentinel
     calibration_start: "2018-01-01"
-    calibration_end: "2023-12-31"
+    calibration_end: "2025-12-31"
     evaluation_start: "2018-01-01"
-    evaluation_end: "2023-12-31"
+    evaluation_end: "2025-12-31"
     container_family: ls_s2_fused
     realizations: 200
     site_filter: s2_sites
@@ -63,9 +64,9 @@ experiments:
   C1:
     question: compute
     calibration_start: "1987-01-01"
-    calibration_end: "2023-12-31"
+    calibration_end: "2025-12-31"
     evaluation_start: "2016-01-01"
-    evaluation_end: "2023-12-31"
+    evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 20
     site_filter: all
@@ -73,9 +74,9 @@ experiments:
   C2:
     question: compute
     calibration_start: "1987-01-01"
-    calibration_end: "2023-12-31"
+    calibration_end: "2025-12-31"
     evaluation_start: "2016-01-01"
-    evaluation_end: "2023-12-31"
+    evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 50
     site_filter: all
@@ -83,7 +84,7 @@ experiments:
 comparisons:
   period:
     experiments: [P1, P2]
-    description: "Does 37-year calibration history outperform 8-year?"
+    description: "Does 39-year calibration history outperform 10-year?"
   sentinel:
     experiments: [S1, S2]
     description: "Does fusing Sentinel-2 NDVI improve ET skill?"
