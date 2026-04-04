@@ -445,11 +445,11 @@ def evaluate_etf(cfg, container, par_csv, fids):
     # Worst / best fields
     ranked = df.sort_values("r2")
     print("\nWorst 10 fields:")
-    for _, row in ranked.head(10).iterrows():
-        print(f"  {row['fid']:<20} R2={row['r2']:.3f}  RMSE={row['rmse']:.3f}")
+    for fid, row in ranked.head(10).iterrows():
+        print(f"  {fid:<20} R2={row['r2']:.3f}  RMSE={row['rmse']:.3f}")
     print("\nBest 10 fields:")
-    for _, row in ranked.tail(10).iterrows():
-        print(f"  {row['fid']:<20} R2={row['r2']:.3f}  RMSE={row['rmse']:.3f}")
+    for fid, row in ranked.tail(10).iterrows():
+        print(f"  {fid:<20} R2={row['r2']:.3f}  RMSE={row['rmse']:.3f}")
 
     return df
 
