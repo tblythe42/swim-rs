@@ -60,7 +60,9 @@ def audit_container(
             has_ndvi_array = False
 
     met_dfs = {}
-    for var in ("eto", "tmax", "tmin", "srad"):
+    # Check eto_corr (preferred at runtime) alongside raw variables
+    met_vars = ["eto", "eto_corr", "tmax", "tmin", "srad"]
+    for var in met_vars:
         met_path = f"meteorology/gridmet/{var}"
         if met_path in container._root:
             try:
@@ -110,8 +112,9 @@ def audit_container(
         if n_ndvi == 0:
             failures.append((fid, "all_null_ndvi"))
 
-        # Meteorology check
-        for var in ("eto", "tmax", "tmin", "srad"):
+        # Meteorology check — runtime prefers eto_corr over raw eto, so
+        # a container with all-null eto_corr but valid raw eto is broken.
+        for var in ("tmax", "tmin", "srad"):
             if var in met_dfs and fid in met_dfs[var].columns:
                 n_met = int(met_dfs[var][fid].notna().sum())
             else:
@@ -119,6 +122,28 @@ def audit_container(
             row[f"has_{var}"] = n_met > 0
             if n_met == 0:
                 failures.append((fid, f"all_null_{var}"))
+
+        # ETo: check eto_corr first (runtime preference), fall back to raw eto
+        has_eto_corr = "eto_corr" in met_dfs and fid in met_dfs["eto_corr"].columns
+        if has_eto_corr:
+            n_eto_corr = int(met_dfs["eto_corr"][fid].notna().sum())
+        else:
+            n_eto_corr = 0
+        row["has_eto_corr"] = n_eto_corr > 0
+
+        has_eto_raw = "eto" in met_dfs and fid in met_dfs["eto"].columns
+        if has_eto_raw:
+            n_eto_raw = int(met_dfs["eto"][fid].notna().sum())
+        else:
+            n_eto_raw = 0
+        row["has_eto"] = n_eto_raw > 0
+
+        # Fail if eto_corr exists in container but is all-null for this site
+        # while raw eto is valid — that means calibration will silently get nulls
+        if has_eto_corr and n_eto_corr == 0 and n_eto_raw > 0:
+            failures.append((fid, "eto_corr_all_null_but_raw_eto_present"))
+        elif n_eto_corr == 0 and n_eto_raw == 0:
+            failures.append((fid, "all_null_eto"))
 
         # Sentinel-2 NDVI (ls_s2_fused only)
         if family_name == "ls_s2_fused":

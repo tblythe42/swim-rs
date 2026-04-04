@@ -94,6 +94,8 @@ def build_experiment_index(runs_dir: str, project: str) -> pd.DataFrame:
 def build_paired_deltas(
     exp_a_dir: str,
     exp_b_dir: str,
+    exp_a_id: str,
+    exp_b_id: str,
     common_fids: list[str] | None,
     label: str,
     output_dir: str | None = None,
@@ -106,6 +108,8 @@ def build_paired_deltas(
     Args:
         exp_a_dir: Results directory for experiment A.
         exp_b_dir: Results directory for experiment B.
+        exp_a_id: Experiment A identifier.
+        exp_b_id: Experiment B identifier.
         common_fids: Site IDs to include (None = intersect both).
         label: Output label (e.g. "period", "sentinel").
         output_dir: Write CSV here if provided.
@@ -113,6 +117,20 @@ def build_paired_deltas(
     Returns:
         DataFrame of paired deltas, or None if data missing.
     """
+    # Load evaluation window bounds from experiment specs
+    eval_start_a = eval_end_a = eval_start_b = eval_end_b = None
+    for edir, eid in [(exp_a_dir, "a"), (exp_b_dir, "b")]:
+        spec_path = os.path.join(edir, "experiment.json")
+        if os.path.exists(spec_path):
+            with open(spec_path) as f:
+                spec = json.load(f)
+            if eid == "a":
+                eval_start_a = spec.get("evaluation_start")
+                eval_end_a = spec.get("evaluation_end")
+            else:
+                eval_start_b = spec.get("evaluation_start")
+                eval_end_b = spec.get("evaluation_end")
+
     results = {}
 
     for timescale, suffix in [
@@ -138,6 +156,14 @@ def build_paired_deltas(
         a, b = a.loc[common], b.loc[common]
         paired = pd.DataFrame(index=common)
 
+        # Provenance columns
+        paired["experiment_a"] = exp_a_id
+        paired["experiment_b"] = exp_b_id
+        paired["evaluation_start_a"] = eval_start_a
+        paired["evaluation_end_a"] = eval_end_a
+        paired["evaluation_start_b"] = eval_start_b
+        paired["evaluation_end_b"] = eval_end_b
+
         # Determine metric columns based on timescale
         if timescale == "etf":
             metrics = ["r2", "rmse", "bias"]
@@ -155,8 +181,11 @@ def build_paired_deltas(
         if r2_col and r2_col in a.columns:
             paired["a_wins_r2"] = a[r2_col] > b[r2_col]
 
+        # Paired observation counts — daily uses "n", monthly uses "n_months"
         if "n" in a.columns:
             paired["n_paired"] = a["n"]
+        if "n_months" in a.columns:
+            paired["n_paired_months"] = a["n_months"]
 
         paired["timescale"] = timescale
         results[timescale] = paired
@@ -326,7 +355,15 @@ def summarize_all(registry: dict, data_dir: str, project: str = "4_Flux_Network"
         if len(exp_ids) == 2:
             a_dir = os.path.join(runs_dir, exp_ids[0])
             b_dir = os.path.join(runs_dir, exp_ids[1])
-            build_paired_deltas(a_dir, b_dir, common_fids, comp_name, summary_dir)
+            build_paired_deltas(
+                a_dir,
+                b_dir,
+                exp_ids[0],
+                exp_ids[1],
+                common_fids,
+                comp_name,
+                summary_dir,
+            )
         elif len(exp_ids) > 2:
             # Multi-way: pairwise against the last experiment as reference
             ref_id = exp_ids[-1]
@@ -334,7 +371,15 @@ def summarize_all(registry: dict, data_dir: str, project: str = "4_Flux_Network"
             for eid in exp_ids[:-1]:
                 e_dir = os.path.join(runs_dir, eid)
                 label = f"{comp_name}_{eid}_vs_{ref_id}"
-                build_paired_deltas(e_dir, ref_dir, common_fids, label, summary_dir)
+                build_paired_deltas(
+                    e_dir,
+                    ref_dir,
+                    eid,
+                    ref_id,
+                    common_fids,
+                    label,
+                    summary_dir,
+                )
 
     # Sentinel density gain
     ls_audit = os.path.join(containers_dir, "container_audit_sites_ls_only.csv")

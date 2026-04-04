@@ -431,7 +431,7 @@ def evaluate_etf(cfg, container, par_csv, fids):
         print("No fields with sufficient ETf data.")
         return pd.DataFrame()
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows).set_index("fid")
 
     print("\n" + "=" * 70)
     print("ETf: SWIM vs SSEBop NHM (at Landsat capture dates)")

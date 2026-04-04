@@ -266,6 +266,23 @@ def cmd_run_experiment(args):
     if not os.path.exists(container_path):
         raise FileNotFoundError(f"Container not found: {container_path}")
 
+    # Enforce audit gate — container must have a passing audit
+    audit_json = os.path.join(
+        abl, "containers", f"container_audit_summary_{spec['container_family']}.json"
+    )
+    if not os.path.exists(audit_json):
+        raise FileNotFoundError(
+            f"No audit found for {spec['container_family']}. "
+            f"Run: audit-container --family {spec['container_family']}"
+        )
+    with open(audit_json) as f:
+        audit = json.load(f)
+    if not audit.get("passed", False):
+        raise RuntimeError(
+            f"Container audit FAILED for {spec['container_family']}. "
+            "Fix data issues before running experiments."
+        )
+
     # Resolve debug fields
     debug_fields = None
     if args.debug_fields:
