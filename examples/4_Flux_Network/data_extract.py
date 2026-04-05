@@ -171,20 +171,20 @@ def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
         sample_gridmet_corrections,
     )
 
-    nldas_needed = getattr(cfg, "runoff_process", "cn") == "ier"
     join_path = cfg.gridmet_mapping_shp
     factors_path = cfg.gridmet_factors
 
-    assign_gridmet_ids(
-        fields=cfg.fields_shapefile,
-        fields_join=join_path,
-        gridmet_points=cfg.gridmet_centroids,
-        field_select=sites,
-        feature_id=cfg.feature_id_col,
-        gridmet_id_col=cfg.gridmet_id_col,
-    )
+    if not os.path.exists(join_path):
+        assign_gridmet_ids(
+            fields=cfg.fields_shapefile,
+            fields_join=join_path,
+            gridmet_points=cfg.gridmet_centroids,
+            field_select=sites,
+            feature_id=cfg.feature_id_col,
+            gridmet_id_col=cfg.gridmet_id_col,
+        )
 
-    if cfg.correction_tifs:
+    if cfg.correction_tifs and not os.path.exists(factors_path):
         sample_gridmet_corrections(
             fields_join=join_path,
             gridmet_ras=cfg.correction_tifs,
@@ -200,7 +200,6 @@ def extract_gridmet(cfg: ProjectConfig, sites=None) -> None:
         end=str(cfg.end_dt.date()),
         overwrite=False,
         append=True,
-        use_nldas=nldas_needed,
         feature_id=cfg.gridmet_mapping_index_col,
         target_fields=sites,
         gridmet_id_col=cfg.gridmet_id_col,
