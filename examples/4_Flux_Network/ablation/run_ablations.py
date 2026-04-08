@@ -301,15 +301,32 @@ def cmd_run_experiment(args):
             "Fix data issues before running experiments."
         )
 
-    # Resolve debug fields
-    debug_fields = None
+    # Resolve site filter → calibration field list
+    site_filter = spec.get("site_filter", "all")
     if args.debug_fields:
-        debug_fields = [s.strip() for s in args.debug_fields.split(",")]
+        resolved_fields = [s.strip() for s in args.debug_fields.split(",")]
+        print(f"CLI debug_fields override: {len(resolved_fields)} sites")
+    elif site_filter != "all":
+        resolved_fields = _resolve_site_filter(site_filter, container_path, abl)
+        print(f"Site filter '{site_filter}': {len(resolved_fields)} sites")
+    else:
+        resolved_fields = None  # calibrate all
+
+    # Write cohort manifest for provenance
+    cohort_path = os.path.join(exp_dir, "cohort.json")
+    cohort_record = {
+        "site_filter": site_filter,
+        "n_sites": len(resolved_fields) if resolved_fields else "all",
+        "sites": resolved_fields,
+    }
+    with open(cohort_path, "w") as f:
+        json.dump(cohort_record, f, indent=2)
 
     print(f"\n{'=' * 80}")
     print(f"CALIBRATION: {exp_id}")
     print(f"  Window: {spec['calibration_start']} → {spec['calibration_end']}")
     print(f"  Realizations: {cfg.realizations}")
+    print(f"  Sites: {len(resolved_fields) if resolved_fields else 'all'}")
     print(f"  Container: {container_path}")
     print(f"  Results: {results_dir}")
     print(f"{'=' * 80}\n")
@@ -321,7 +338,7 @@ def cmd_run_experiment(args):
         cfg,
         results_dir,
         pdc_remove=False,
-        debug_fields=debug_fields,
+        debug_fields=resolved_fields,
         container_path=container_path,
     )
     elapsed = time.time() - t0
@@ -333,6 +350,8 @@ def cmd_run_experiment(args):
         "calibration_end": spec["calibration_end"],
         "realizations": cfg.realizations,
         "workers": cfg.workers,
+        "site_filter": site_filter,
+        "n_sites": len(resolved_fields) if resolved_fields else "all",
         "wall_seconds": round(elapsed, 1),
         "wall_minutes": round(elapsed / 60, 1),
     }
@@ -346,10 +365,32 @@ def cmd_run_experiment(args):
         "cpu_hours": round(elapsed * cfg.workers / 3600, 2),
         "workers": cfg.workers,
         "realizations": cfg.realizations,
+        "n_sites": len(resolved_fields) if resolved_fields else "all",
         "container_family": spec["container_family"],
     }
     with open(os.path.join(exp_dir, "cost.json"), "w") as f:
         json.dump(cost, f, indent=2)
+
+    # Write config snapshot for full reproducibility
+    config_snapshot = {
+        "experiment_id": exp_id,
+        "calibration_start": spec["calibration_start"],
+        "calibration_end": spec["calibration_end"],
+        "evaluation_start": spec["evaluation_start"],
+        "evaluation_end": spec["evaluation_end"],
+        "realizations": cfg.realizations,
+        "workers": cfg.workers,
+        "noptmax": getattr(cfg, "noptmax", 3),
+        "pdc_remove": False,
+        "container_family": spec["container_family"],
+        "container_path": container_path,
+        "site_filter": site_filter,
+        "n_sites": len(resolved_fields) if resolved_fields else "all",
+        "sites": resolved_fields,
+        "audit_json": audit_json,
+    }
+    with open(os.path.join(exp_dir, "config_snapshot.json"), "w") as f:
+        json.dump(config_snapshot, f, indent=2)
 
     print(f"\n{exp_id} calibration complete: {elapsed:.1f}s ({elapsed / 60:.1f} min)")
 
