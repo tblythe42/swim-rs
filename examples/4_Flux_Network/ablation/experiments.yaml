@@ -1,12 +1,12 @@
 # Ex4 Ablation Experiment Registry — Study 1
 #
-# Updated 2026-04-07: added lulc_representative subset (12 sites, 2 per LULC)
-# for compute/accuracy ablations. Full-site experiments retained for period/sentinel.
-# Do not edit experiment windows without updating the manuscript plan.
+# Updated 2026-04-07: all experiments use lulc_representative subset (12 sites,
+# 2 per LULC with longest flux records). Full-cohort production calibration is
+# the existing 160-site run in /data/ssd1/swim/4_Flux_Network/results/.
 
 meta:
   study: 1
-  description: "Ex4 ablation: period-of-record, Sentinel-2 NDVI, compute efficiency"
+  description: "Ex4 ablation: period-of-record, Sentinel-2 NDVI, compute efficiency (12-site LULC subset)"
   frozen_date: "2026-04-07"
   base_config: "../4_Flux_Network.toml"
 
@@ -14,14 +14,14 @@ container_families:
   ls_only:
     add_sentinel: false
     merged_ndvi_instruments: ["landsat"]
-    description: "Landsat-only NDVI (baseline for P, S, C experiments)"
+    description: "Landsat-only NDVI"
   ls_s2_fused:
     add_sentinel: true
     merged_ndvi_instruments: ["landsat", "sentinel"]
-    description: "Landsat + Sentinel-2 fused NDVI (S2 only)"
+    description: "Landsat + Sentinel-2 fused NDVI"
 
 experiments:
-  # --- Period-of-record (full site set) ---
+  # --- Period-of-record ---
   P1:
     question: period
     calibration_start: "1987-01-01"
@@ -30,7 +30,7 @@ experiments:
     evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 200
-    site_filter: all
+    site_filter: lulc_representative
 
   P2:
     question: period
@@ -40,9 +40,9 @@ experiments:
     evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 200
-    site_filter: all
+    site_filter: lulc_representative
 
-  # --- Sentinel-2 NDVI (S2-available sites only) ---
+  # --- Sentinel-2 NDVI ---
   S1:
     question: sentinel
     calibration_start: "2018-01-01"
@@ -51,7 +51,7 @@ experiments:
     evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 200
-    site_filter: s2_sites
+    site_filter: lulc_representative
 
   S2:
     question: sentinel
@@ -61,9 +61,9 @@ experiments:
     evaluation_end: "2025-12-31"
     container_family: ls_s2_fused
     realizations: 200
-    site_filter: s2_sites
+    site_filter: lulc_representative
 
-  # --- Compute efficiency (12-site LULC-representative subset) ---
+  # --- Compute efficiency ---
   C1:
     question: compute
     calibration_start: "1987-01-01"
@@ -108,10 +108,11 @@ comparisons:
   period:
     experiments: [P1, P2]
     description: "Does 39-year calibration history outperform 10-year?"
+    cohort: lulc_representative
   sentinel:
     experiments: [S1, S2]
     description: "Does fusing Sentinel-2 NDVI improve ET skill?"
-    cohort: s2_sites
+    cohort: lulc_representative
   compute:
     experiments: [C1, C2, C3, C4]
     description: "Diminishing returns from realization count (20, 50, 100, 200)?"
