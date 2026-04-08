@@ -34,6 +34,7 @@ def run_pest_sequence(
     pdc_remove: bool = False,
     debug_fields: list[str] | None = None,
     exclude_fields: list[str] | None = None,
+    select_fields: list[str] | None = None,
     ies_num_threads: int | None = None,
     container_path: str | None = None,
 ):
@@ -69,6 +70,14 @@ def run_pest_sequence(
         builder.pest_args = builder.get_pest_builder_args()
         print(f"Excluded {before - len(builder.plot_order)} fields: {exclude_fields}")
         print(f"Calibrating {len(builder.plot_order)} fields")
+
+    if select_fields is not None:
+        missing = [f for f in select_fields if f not in builder.plot_order]
+        if missing:
+            raise ValueError(f"Selected fields not in container: {missing}")
+        builder.plot_order = select_fields
+        builder.pest_args = builder.get_pest_builder_args()
+        print(f"Selected {len(select_fields)} fields for calibration")
 
     if debug_fields is not None:
         missing = [f for f in debug_fields if f not in builder.plot_order]
@@ -110,6 +119,9 @@ def run_pest_sequence(
             )
             if exclude_fields:
                 builder.plot_order = [f for f in builder.plot_order if f not in exclude_fields]
+                builder.pest_args = builder.get_pest_builder_args()
+            if select_fields is not None:
+                builder.plot_order = select_fields
                 builder.pest_args = builder.get_pest_builder_args()
             if debug_fields is not None:
                 builder.plot_order = debug_fields

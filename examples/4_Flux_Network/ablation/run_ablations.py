@@ -306,17 +306,15 @@ def cmd_run_experiment(args):
     if args.debug_fields:
         resolved_fields = [s.strip() for s in args.debug_fields.split(",")]
         print(f"CLI debug_fields override: {len(resolved_fields)} sites")
-    elif site_filter != "all":
+    else:
         resolved_fields = _resolve_site_filter(site_filter, container_path, abl)
         print(f"Site filter '{site_filter}': {len(resolved_fields)} sites")
-    else:
-        resolved_fields = None  # calibrate all
 
     # Write cohort manifest for provenance
     cohort_path = os.path.join(exp_dir, "cohort.json")
     cohort_record = {
         "site_filter": site_filter,
-        "n_sites": len(resolved_fields) if resolved_fields else "all",
+        "n_sites": len(resolved_fields),
         "sites": resolved_fields,
     }
     with open(cohort_path, "w") as f:
@@ -333,12 +331,14 @@ def cmd_run_experiment(args):
 
     from calibrate import run_pest_sequence
 
+    # Use select_fields (not debug_fields) so realization count and workers
+    # are not overridden by debug mode defaults.
     t0 = time.time()
     run_pest_sequence(
         cfg,
         results_dir,
         pdc_remove=False,
-        debug_fields=resolved_fields,
+        select_fields=resolved_fields,
         container_path=container_path,
     )
     elapsed = time.time() - t0
@@ -351,7 +351,7 @@ def cmd_run_experiment(args):
         "realizations": cfg.realizations,
         "workers": cfg.workers,
         "site_filter": site_filter,
-        "n_sites": len(resolved_fields) if resolved_fields else "all",
+        "n_sites": len(resolved_fields),
         "wall_seconds": round(elapsed, 1),
         "wall_minutes": round(elapsed / 60, 1),
     }
@@ -365,7 +365,7 @@ def cmd_run_experiment(args):
         "cpu_hours": round(elapsed * cfg.workers / 3600, 2),
         "workers": cfg.workers,
         "realizations": cfg.realizations,
-        "n_sites": len(resolved_fields) if resolved_fields else "all",
+        "n_sites": len(resolved_fields),
         "container_family": spec["container_family"],
     }
     with open(os.path.join(exp_dir, "cost.json"), "w") as f:
@@ -385,7 +385,7 @@ def cmd_run_experiment(args):
         "container_family": spec["container_family"],
         "container_path": container_path,
         "site_filter": site_filter,
-        "n_sites": len(resolved_fields) if resolved_fields else "all",
+        "n_sites": len(resolved_fields),
         "sites": resolved_fields,
         "audit_json": audit_json,
     }
@@ -425,11 +425,18 @@ def cmd_evaluate_experiment(args):
     if par_csv is None:
         raise FileNotFoundError(f"No par.csv in {results_dir}. Run run-experiment first.")
 
-    # Resolve site list
+    # Resolve site list from calibration cohort (ensures evaluation matches calibration)
+    cohort_path = os.path.join(exp_dir, "cohort.json")
     if args.debug_fields:
         fids = [s.strip() for s in args.debug_fields.split(",")]
+    elif os.path.exists(cohort_path):
+        with open(cohort_path) as f:
+            cohort = json.load(f)
+        fids = cohort["sites"]
+        print(f"Using calibration cohort from {cohort_path} ({len(fids)} sites)")
     else:
         fids = _resolve_site_filter(spec["site_filter"], container_path, abl)
+        print("WARNING: no cohort.json found, recomputing from registry")
 
     print(f"\n{'=' * 80}")
     print(f"EVALUATION: {exp_id}")
