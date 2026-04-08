@@ -236,6 +236,24 @@ def _resolve_site_filter(
         # Intersect with container fields and exclusion policy
         return [f for f in all_fids if f in s2_ids]
 
+    if site_filter == "lulc_representative":
+        # 2 sites per LULC class with longest flux records
+        REPRESENTATIVE_SITES = [
+            "US-Ne1",
+            "US-Ne2",  # Croplands
+            "US-Me2",
+            "US-Me6",  # Evergreen Forests
+            "US-Wkg",
+            "US-SRG",  # Grasslands
+            "US-MMS",
+            "US-Dk2",  # Mixed Forests
+            "US-SRM",
+            "US-Jo2",  # Shrublands
+            "US-CMW",
+            "US-Skr",  # Wetland/Riparian
+        ]
+        return [f for f in all_fids if f in REPRESENTATIVE_SITES]
+
     raise ValueError(f"Unknown site_filter: {site_filter}")
 
 

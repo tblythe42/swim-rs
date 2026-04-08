@@ -1,26 +1,27 @@
 # Ex4 Ablation Experiment Registry — Study 1
 #
-# Updated 2026-04-04: extended all experiments to 2025-12-31 (SSEBop NHM ETf
-# reproduced via openet-ssebop v0.2.6 for 2024-2025).
+# Updated 2026-04-07: added lulc_representative subset (12 sites, 2 per LULC)
+# for compute/accuracy ablations. Full-site experiments retained for period/sentinel.
 # Do not edit experiment windows without updating the manuscript plan.
 
 meta:
   study: 1
   description: "Ex4 ablation: period-of-record, Sentinel-2 NDVI, compute efficiency"
-  frozen_date: "2026-04-04"
+  frozen_date: "2026-04-07"
   base_config: "../4_Flux_Network.toml"
 
 container_families:
   ls_only:
     add_sentinel: false
     merged_ndvi_instruments: ["landsat"]
-    description: "Landsat-only NDVI (baseline for P1, P2, S1, C1, C2)"
+    description: "Landsat-only NDVI (baseline for P, S, C experiments)"
   ls_s2_fused:
     add_sentinel: true
     merged_ndvi_instruments: ["landsat", "sentinel"]
     description: "Landsat + Sentinel-2 fused NDVI (S2 only)"
 
 experiments:
+  # --- Period-of-record (full site set) ---
   P1:
     question: period
     calibration_start: "1987-01-01"
@@ -41,6 +42,7 @@ experiments:
     realizations: 200
     site_filter: all
 
+  # --- Sentinel-2 NDVI (S2-available sites only) ---
   S1:
     question: sentinel
     calibration_start: "2018-01-01"
@@ -61,6 +63,7 @@ experiments:
     realizations: 200
     site_filter: s2_sites
 
+  # --- Compute efficiency (12-site LULC-representative subset) ---
   C1:
     question: compute
     calibration_start: "1987-01-01"
@@ -69,7 +72,7 @@ experiments:
     evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 20
-    site_filter: all
+    site_filter: lulc_representative
 
   C2:
     question: compute
@@ -79,7 +82,27 @@ experiments:
     evaluation_end: "2025-12-31"
     container_family: ls_only
     realizations: 50
-    site_filter: all
+    site_filter: lulc_representative
+
+  C3:
+    question: compute
+    calibration_start: "1987-01-01"
+    calibration_end: "2025-12-31"
+    evaluation_start: "2016-01-01"
+    evaluation_end: "2025-12-31"
+    container_family: ls_only
+    realizations: 100
+    site_filter: lulc_representative
+
+  C4:
+    question: compute
+    calibration_start: "1987-01-01"
+    calibration_end: "2025-12-31"
+    evaluation_start: "2016-01-01"
+    evaluation_end: "2025-12-31"
+    container_family: ls_only
+    realizations: 200
+    site_filter: lulc_representative
 
 comparisons:
   period:
@@ -90,5 +113,6 @@ comparisons:
     description: "Does fusing Sentinel-2 NDVI improve ET skill?"
     cohort: s2_sites
   compute:
-    experiments: [C1, C2, P1]
-    description: "Diminishing returns from realization count?"
+    experiments: [C1, C2, C3, C4]
+    description: "Diminishing returns from realization count (20, 50, 100, 200)?"
+    cohort: lulc_representative
