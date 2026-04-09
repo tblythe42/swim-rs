@@ -6,7 +6,6 @@ manifest handling, run manifest creation, and resolved restart state persistence
 
 import hashlib
 import json
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -474,50 +473,15 @@ def persist_calibration_resolved_state(
         except ValueError as exc:
             if "Non-finite state" not in str(exc):
                 raise
-            # Some calibrated fields produce NaN during forward run (extreme
-            # parameter values from unconstrained calibration). Identify and
-            # drop the offending fields, then retry.
+            # Some fields produce NaN during the forward run due to NaN met,
+            # NaN soil properties, or extreme calibrated parameter values.
+            # Identify bad fields by inspecting container data directly
+            # (running the model would also crash), then retry without them.
             print(f"WARNING: resolved state hit NaN state: {exc}")
-            n_bad = (
-                int(str(exc).split("depl_root=")[1].split(",")[0])
-                if "depl_root=" in str(exc)
-                else 0
-            )
-            if calibrated_uids and n_bad > 0 and n_bad < len(calibrated_uids):
-                print(f"  Retrying without the {n_bad} NaN fields...")
-                # The NaN check is vectorized — we can't easily identify which
-                # fields failed without running them individually. Use the fast
-                # loop to identify bad fields, then exclude them.
-                import tempfile
-
-                from swimrs.process.input import build_swim_input
-                from swimrs.process.loop_fast import run_daily_loop_fast
-
-                fd, h5 = tempfile.mkstemp(suffix=".h5")
-                os.close(fd)
-                Path(h5).unlink(missing_ok=True)
-                try:
-                    si = build_swim_input(
-                        container,
-                        output_h5=h5,
-                        refet_type=run_kwargs["refet_type"],
-                        etf_model=run_kwargs["etf_model"],
-                        met_source=run_kwargs["met_source"],
-                        mask_mode=run_kwargs["mask_mode"],
-                        fields=calibrated_uids,
-                    )
-                    output, _ = run_daily_loop_fast(si)
-                    # Fields with all-NaN eta are the bad ones
-                    bad_fields = []
-                    for i, uid in enumerate(calibrated_uids):
-                        if np.all(np.isnan(output.eta[:, i])):
-                            bad_fields.append(uid)
-                    si.close()
-                finally:
-                    Path(h5).unlink(missing_ok=True)
-
+            if calibrated_uids:
+                bad_fields = _find_nan_fields(root, all_uids, calibrated_uids)
                 if bad_fields:
-                    print(f"  Dropping {len(bad_fields)} NaN fields: {bad_fields}")
+                    print(f"  Dropping {len(bad_fields)} NaN-input fields: {bad_fields}")
                     safe_uids = [u for u in calibrated_uids if u not in set(bad_fields)]
                     run_kwargs["fields"] = safe_uids
                     run_kwargs["overwrite"] = True
@@ -534,6 +498,56 @@ def persist_calibration_resolved_state(
 
     print("Persisted calibration resolved restart state: calibration_resolved_state")
     return True
+
+
+def _find_nan_fields(root, all_uids, candidate_uids):
+    """Identify fields with NaN in critical container arrays.
+
+    Checks meteorology (ETo), soil properties (AWC), and calibrated parameters
+    for NaN values that would cause the forward model to produce non-finite state.
+    Does not run the model — inspects container data directly.
+    """
+    import numpy as np
+
+    bad = set()
+    candidate_set = set(candidate_uids)
+
+    # Check ETo: fields with >50% NaN days are likely to crash
+    try:
+        eto = root["meteorology/era5/eto"][:]
+        for i, uid in enumerate(all_uids):
+            if uid not in candidate_set:
+                continue
+            n_nan = np.isnan(eto[:, i]).sum()
+            if n_nan > 0.5 * eto.shape[0]:
+                bad.add(uid)
+    except KeyError:
+        pass
+
+    # Check GridMET ETo as fallback
+    try:
+        eto = root["meteorology/gridmet/eto"][:]
+        for i, uid in enumerate(all_uids):
+            if uid not in candidate_set:
+                continue
+            n_nan = np.isnan(eto[:, i]).sum()
+            if n_nan > 0.5 * eto.shape[0]:
+                bad.add(uid)
+    except KeyError:
+        pass
+
+    # Check AWC from properties
+    try:
+        awc = root["properties/soils/awc"][:]
+        for i, uid in enumerate(all_uids):
+            if uid not in candidate_set:
+                continue
+            if np.isnan(awc[i]) or awc[i] <= 0:
+                bad.add(uid)
+    except KeyError:
+        pass
+
+    return sorted(bad)
 
 
 # ---------------------------------------------------------------------------

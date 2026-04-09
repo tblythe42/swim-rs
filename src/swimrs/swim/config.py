@@ -94,6 +94,15 @@ class ProjectConfig:
         self.etf_weighting_fixed_sd = 0.33
         self.etf_weighting_spread_floor = 0.1
         self.etf_weighting_min_members = 2
+        self.prior_regularization_fraction = 0.2
+        self.prior_regularization_params = [
+            "aw",
+            "ndvi_k",
+            "ndvi_0",
+            "mad",
+            "ks_alpha",
+            "kr_alpha",
+        ]
         self.workers = None
         self.realizations = None
         self.calibration_dir = None
@@ -370,6 +379,14 @@ class ProjectConfig:
         self.initial_values_csv = calib_toml_conf.get("initial_values_csv")
         self.spinup = calib_toml_conf.get("spinup")
         self.python_script = calib_toml_conf.get("python_script")
+
+        # Regularization
+        self.prior_regularization_fraction = calib_toml_conf.get(
+            "prior_regularization_fraction", 0.2
+        )
+        reg_params = calib_toml_conf.get("prior_regularization_params")
+        if reg_params is not None:
+            self.prior_regularization_params = list(reg_params)
 
         # Forecast
         self.forecast_parameters_csv = forecast_toml_conf.get("forecast_parameters")
