@@ -430,23 +430,23 @@ def persist_calibration_resolved_state(
 
     container = SwimContainer.open(str(container_path), mode="r+")
     try:
-        # Only run fields that have non-NaN calibrated parameters
         all_uids = container.field_uids
         root = container._root
+        met_source = getattr(config, "met_source", "gridmet") or "gridmet"
+
+        # Resolve run fields: exclude uncalibrated (NaN aw) fields
         try:
             aw = root["calibration/parameters/aw"][:]
-            calibrated_uids = [uid for uid, val in zip(all_uids, aw) if not np.isnan(val)]
+            run_uids = [uid for uid, val in zip(all_uids, aw) if not np.isnan(val)]
         except KeyError:
-            calibrated_uids = None  # no calibration params — run all
+            run_uids = list(all_uids)
 
-        if calibrated_uids is not None and len(calibrated_uids) < len(all_uids):
-            n_skip = len(all_uids) - len(calibrated_uids)
+        if len(run_uids) < len(all_uids):
+            n_skip = len(all_uids) - len(run_uids)
             print(
-                f"Resolved state: running {len(calibrated_uids)} calibrated fields "
+                f"Resolved state: running {len(run_uids)} calibrated fields "
                 f"(skipping {n_skip} uncalibrated)"
             )
-        else:
-            calibrated_uids = None  # run all
 
         run_kwargs = dict(
             run_id="calibration_resolved_state",
@@ -455,11 +455,11 @@ def persist_calibration_resolved_state(
             engine="python",
             refet_type=getattr(config, "refet_type", "eto") or "eto",
             etf_model=getattr(config, "etf_target_model", "ssebop") or "ssebop",
-            met_source=getattr(config, "met_source", "gridmet") or "gridmet",
+            met_source=met_source,
             mask_mode=getattr(config, "mask_mode", "irrigation") or "irrigation",
             ndvi_mode="observed",
             max_irr_rate=getattr(config, "max_irr_rate", 100.0) or 100.0,
-            fields=calibrated_uids,
+            fields=run_uids,
             command=command,
             run_attrs={
                 "run_role": "resolved_restart",
@@ -478,16 +478,13 @@ def persist_calibration_resolved_state(
             # Identify bad fields by inspecting container data directly
             # (running the model would also crash), then retry without them.
             print(f"WARNING: resolved state hit NaN state: {exc}")
-            if calibrated_uids:
-                bad_fields = _find_nan_fields(root, all_uids, calibrated_uids)
-                if bad_fields:
-                    print(f"  Dropping {len(bad_fields)} NaN-input fields: {bad_fields}")
-                    safe_uids = [u for u in calibrated_uids if u not in set(bad_fields)]
-                    run_kwargs["fields"] = safe_uids
-                    run_kwargs["overwrite"] = True
-                    container.run(**run_kwargs)
-                else:
-                    raise
+            bad_fields = _find_nan_fields(root, all_uids, run_uids, met_source)
+            if bad_fields:
+                print(f"  Dropping {len(bad_fields)} NaN-input fields: {bad_fields}")
+                safe_uids = [u for u in run_uids if u not in set(bad_fields)]
+                run_kwargs["fields"] = safe_uids
+                run_kwargs["overwrite"] = True
+                container.run(**run_kwargs)
             else:
                 raise
 
@@ -500,38 +497,29 @@ def persist_calibration_resolved_state(
     return True
 
 
-def _find_nan_fields(root, all_uids, candidate_uids):
+def _find_nan_fields(root, all_uids, candidate_uids, met_source="gridmet"):
     """Identify fields with NaN in critical container arrays.
 
-    Checks meteorology (ETo), soil properties (AWC), and calibrated parameters
-    for NaN values that would cause the forward model to produce non-finite state.
-    Does not run the model — inspects container data directly.
-    """
-    import numpy as np
+    Checks the active meteorology source (ETo), soil properties (AWC), and
+    calibrated parameters for any NaN values that would cause the forward
+    model to produce non-finite state. Does not run the model.
 
+    Parameters
+    ----------
+    met_source : str
+        Active met source ("era5" or "gridmet"). Only that source is checked.
+    """
     bad = set()
     candidate_set = set(candidate_uids)
 
-    # Check ETo: fields with >50% NaN days are likely to crash
+    # Check ETo for the active met source only — any NaN can propagate
+    met_key = "era5" if met_source == "era5" else "gridmet"
     try:
-        eto = root["meteorology/era5/eto"][:]
+        eto = root[f"meteorology/{met_key}/eto"][:]
         for i, uid in enumerate(all_uids):
             if uid not in candidate_set:
                 continue
-            n_nan = np.isnan(eto[:, i]).sum()
-            if n_nan > 0.5 * eto.shape[0]:
-                bad.add(uid)
-    except KeyError:
-        pass
-
-    # Check GridMET ETo as fallback
-    try:
-        eto = root["meteorology/gridmet/eto"][:]
-        for i, uid in enumerate(all_uids):
-            if uid not in candidate_set:
-                continue
-            n_nan = np.isnan(eto[:, i]).sum()
-            if n_nan > 0.5 * eto.shape[0]:
+            if np.any(np.isnan(eto[:, i])):
                 bad.add(uid)
     except KeyError:
         pass
