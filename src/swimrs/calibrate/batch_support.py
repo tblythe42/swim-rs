@@ -480,8 +480,13 @@ def persist_calibration_resolved_state(
             print(f"WARNING: resolved state hit NaN state: {exc}")
             bad_fields = _find_nan_fields(root, all_uids, run_uids, met_source)
             if bad_fields:
-                print(f"  Dropping {len(bad_fields)} NaN-input fields: {bad_fields}")
                 safe_uids = [u for u in run_uids if u not in set(bad_fields)]
+                if not safe_uids:
+                    raise ValueError(
+                        f"All {len(run_uids)} fields have NaN inputs — cannot run resolved state"
+                    ) from exc
+                print(f"  Dropping {len(bad_fields)} NaN-input fields: {bad_fields}")
+                print(f"  Retrying with {len(safe_uids)} fields")
                 run_kwargs["fields"] = safe_uids
                 run_kwargs["overwrite"] = True
                 container.run(**run_kwargs)
@@ -512,17 +517,18 @@ def _find_nan_fields(root, all_uids, candidate_uids, met_source="gridmet"):
     bad = set()
     candidate_set = set(candidate_uids)
 
-    # Check ETo for the active met source only — any NaN can propagate
+    # Check all met variables for the active source — any NaN can propagate
     met_key = "era5" if met_source == "era5" else "gridmet"
-    try:
-        eto = root[f"meteorology/{met_key}/eto"][:]
-        for i, uid in enumerate(all_uids):
-            if uid not in candidate_set:
-                continue
-            if np.any(np.isnan(eto[:, i])):
-                bad.add(uid)
-    except KeyError:
-        pass
+    for var in ["eto", "prcp", "tmin", "tmax", "srad"]:
+        try:
+            arr = root[f"meteorology/{met_key}/{var}"][:]
+            for i, uid in enumerate(all_uids):
+                if uid not in candidate_set or uid in bad:
+                    continue
+                if np.any(np.isnan(arr[:, i])):
+                    bad.add(uid)
+        except KeyError:
+            pass
 
     # Check AWC from properties
     try:
