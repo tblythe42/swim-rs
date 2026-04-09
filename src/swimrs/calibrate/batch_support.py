@@ -478,7 +478,8 @@ def persist_calibration_resolved_state(
             # Identify bad fields by inspecting container data directly
             # (running the model would also crash), then retry without them.
             print(f"WARNING: resolved state hit NaN state: {exc}")
-            bad_fields = _find_nan_fields(root, all_uids, run_uids, met_source)
+            refet_type = run_kwargs["refet_type"]
+            bad_fields = _find_nan_fields(root, all_uids, run_uids, met_source, refet_type)
             if bad_fields:
                 safe_uids = [u for u in run_uids if u not in set(bad_fields)]
                 if not safe_uids:
@@ -502,10 +503,10 @@ def persist_calibration_resolved_state(
     return True
 
 
-def _find_nan_fields(root, all_uids, candidate_uids, met_source="gridmet"):
+def _find_nan_fields(root, all_uids, candidate_uids, met_source="gridmet", refet_type="eto"):
     """Identify fields with NaN in critical container arrays.
 
-    Checks the active meteorology source (ETo), soil properties (AWC), and
+    Checks the active meteorology source, soil properties (AWC), and
     calibrated parameters for any NaN values that would cause the forward
     model to produce non-finite state. Does not run the model.
 
@@ -513,13 +514,33 @@ def _find_nan_fields(root, all_uids, candidate_uids, met_source="gridmet"):
     ----------
     met_source : str
         Active met source ("era5" or "gridmet"). Only that source is checked.
+    refet_type : str
+        Reference ET type ("eto" or "etr"). Checks the corrected variant first
+        (e.g. "eto_corr"), falling back to the raw variant — matching the
+        precedence in build_swim_input.
     """
     bad = set()
     candidate_set = set(candidate_uids)
 
-    # Check all met variables for the active source — any NaN can propagate
+    # Check all met variables for the active source — any NaN can propagate.
+    # For refET, check the corrected variant first (what the model actually uses).
     met_key = "era5" if met_source == "era5" else "gridmet"
-    for var in ["eto", "prcp", "tmin", "tmax", "srad"]:
+    refet_variants = [f"{refet_type}_corr", refet_type]
+    other_vars = ["prcp", "tmin", "tmax", "srad"]
+
+    for var in refet_variants:
+        try:
+            arr = root[f"meteorology/{met_key}/{var}"][:]
+            for i, uid in enumerate(all_uids):
+                if uid not in candidate_set or uid in bad:
+                    continue
+                if np.any(np.isnan(arr[:, i])):
+                    bad.add(uid)
+            break  # found the refET array — don't check fallback
+        except KeyError:
+            continue
+
+    for var in other_vars:
         try:
             arr = root[f"meteorology/{met_key}/{var}"][:]
             for i, uid in enumerate(all_uids):
