@@ -6,6 +6,7 @@ manifest handling, run manifest creation, and resolved restart state persistence
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -407,8 +408,12 @@ def persist_calibration_resolved_state(
 ):
     """Persist the canonical post-calibration restart run in the container.
 
+    Only runs fields that were actually calibrated (from batch manifest),
+    excluding any with NaN calibration parameters.
     Only runs if all manifest batches are ingested.
     """
+    import numpy as np
+
     from swimrs.container.container import SwimContainer
     from swimrs.swim.config import ProjectConfig
 
@@ -426,7 +431,25 @@ def persist_calibration_resolved_state(
 
     container = SwimContainer.open(str(container_path), mode="r+")
     try:
-        container.run(
+        # Only run fields that have non-NaN calibrated parameters
+        all_uids = container.field_uids
+        root = container._root
+        try:
+            aw = root["calibration/parameters/aw"][:]
+            calibrated_uids = [uid for uid, val in zip(all_uids, aw) if not np.isnan(val)]
+        except KeyError:
+            calibrated_uids = None  # no calibration params — run all
+
+        if calibrated_uids is not None and len(calibrated_uids) < len(all_uids):
+            n_skip = len(all_uids) - len(calibrated_uids)
+            print(
+                f"Resolved state: running {len(calibrated_uids)} calibrated fields "
+                f"(skipping {n_skip} uncalibrated)"
+            )
+        else:
+            calibrated_uids = None  # run all
+
+        run_kwargs = dict(
             run_id="calibration_resolved_state",
             profile="state_only",
             overwrite=True,
@@ -437,6 +460,7 @@ def persist_calibration_resolved_state(
             mask_mode=getattr(config, "mask_mode", "irrigation") or "irrigation",
             ndvi_mode="observed",
             max_irr_rate=getattr(config, "max_irr_rate", 100.0) or 100.0,
+            fields=calibrated_uids,
             command=command,
             run_attrs={
                 "run_role": "resolved_restart",
@@ -444,6 +468,65 @@ def persist_calibration_resolved_state(
             },
             use_default_restart=False,
         )
+
+        try:
+            container.run(**run_kwargs)
+        except ValueError as exc:
+            if "Non-finite state" not in str(exc):
+                raise
+            # Some calibrated fields produce NaN during forward run (extreme
+            # parameter values from unconstrained calibration). Identify and
+            # drop the offending fields, then retry.
+            print(f"WARNING: resolved state hit NaN state: {exc}")
+            n_bad = (
+                int(str(exc).split("depl_root=")[1].split(",")[0])
+                if "depl_root=" in str(exc)
+                else 0
+            )
+            if calibrated_uids and n_bad > 0 and n_bad < len(calibrated_uids):
+                print(f"  Retrying without the {n_bad} NaN fields...")
+                # The NaN check is vectorized — we can't easily identify which
+                # fields failed without running them individually. Use the fast
+                # loop to identify bad fields, then exclude them.
+                import tempfile
+
+                from swimrs.process.input import build_swim_input
+                from swimrs.process.loop_fast import run_daily_loop_fast
+
+                fd, h5 = tempfile.mkstemp(suffix=".h5")
+                os.close(fd)
+                Path(h5).unlink(missing_ok=True)
+                try:
+                    si = build_swim_input(
+                        container,
+                        output_h5=h5,
+                        refet_type=run_kwargs["refet_type"],
+                        etf_model=run_kwargs["etf_model"],
+                        met_source=run_kwargs["met_source"],
+                        mask_mode=run_kwargs["mask_mode"],
+                        fields=calibrated_uids,
+                    )
+                    output, _ = run_daily_loop_fast(si)
+                    # Fields with all-NaN eta are the bad ones
+                    bad_fields = []
+                    for i, uid in enumerate(calibrated_uids):
+                        if np.all(np.isnan(output.eta[:, i])):
+                            bad_fields.append(uid)
+                    si.close()
+                finally:
+                    Path(h5).unlink(missing_ok=True)
+
+                if bad_fields:
+                    print(f"  Dropping {len(bad_fields)} NaN fields: {bad_fields}")
+                    safe_uids = [u for u in calibrated_uids if u not in set(bad_fields)]
+                    run_kwargs["fields"] = safe_uids
+                    run_kwargs["overwrite"] = True
+                    container.run(**run_kwargs)
+                else:
+                    raise
+            else:
+                raise
+
         container.runs.set_default_restart("calibration_resolved_state")
         container.save()
     finally:

@@ -296,6 +296,12 @@ class PestBuilder:
             )
 
         df = self._container.query.dataframe(path, fields=[fid])
+        # Slice to config date range to match the exported .np obs files
+        start = getattr(self.config, "start_dt", None)
+        end = getattr(self.config, "end_dt", None)
+        if start is not None and end is not None:
+            date_range = pd.date_range(start, end, freq="D")
+            df = df.reindex(date_range)
         result = pd.DataFrame(index=df.index)
         result["swe"] = df[fid] if fid in df.columns else np.nan
         return result
@@ -1487,33 +1493,203 @@ if __name__ == "__main__":
 
         pst.write(pst.filename, version=2)
 
-    def add_regularization(self) -> None:
-        pst = Pst(self.pst_file)
+    def apply_prior_params(self, prior_params_path: str) -> None:
+        """Override .pst parval1 with LULC-specific prior values from a JSON file.
 
-        for pargp, values in self.initial_parameter_dict().items():
-            target_params = pst.parameter_data.loc[pst.parameter_data.pargp == pargp].copy()
-            is_log = target_params["partrans"].iloc[0] == "log"
-            prior_std = values["std"]
+        The JSON should map site IDs to parameter dicts, e.g.:
+            {"US-Bi1": {"aw": 361, "ndvi_k": 4.85, "ks_alpha": 0.39, ...}, ...}
+
+        Parameters not present in the JSON for a given site are left unchanged.
+        This must be called after build_pest() and before add_regularization().
+        """
+        with open(prior_params_path) as f:
+            prior_params = json.load(f)
+
+        # Map JSON param names to .pst pargp names
+        name_map = {"kr_alpha": "kr_alpha", "ks_alpha": "ks_alpha"}
+
+        pst = Pst(self.pst_file)
+        par = pst.parameter_data
+        n_updated = 0
+
+        for fid, site_params in prior_params.items():
+            for param_name, value in site_params.items():
+                pargp = name_map.get(param_name, param_name)
+                # Find the matching parameter row
+                mask = (par["pargp"] == pargp) & par.index.str.contains(
+                    f"_{fid.lower()}_", case=False
+                )
+                if mask.any():
+                    idx = par.index[mask]
+                    # Clamp to bounds
+                    lb = par.loc[idx, "parlbnd"].values[0]
+                    ub = par.loc[idx, "parubnd"].values[0]
+                    clamped = max(lb, min(ub, float(value)))
+                    par.loc[idx, "parval1"] = clamped
+                    n_updated += 1
+
+        pst.write(self.pst_file, version=2)
+        print(f"  Applied prior params to {n_updated} parameters from {prior_params_path}")
+
+    @staticmethod
+    def _etf_information_mass_by_site(pst) -> dict:
+        """Compute sum(weight²) for ETf observations per site."""
+        obs = pst.observation_data
+        etf_mask = obs.index.str.contains("obs_etf_", case=False)
+        etf_obs = obs.loc[etf_mask].copy()
+
+        site_mass = {}
+        for obs_name, row in etf_obs.iterrows():
+            w = float(row.get("weight", 0.0))
+            if not np.isfinite(w) or w <= 0:
+                continue
+            # Extract site ID: oname:obs_etf_{fid}_otype:...
+            parts = obs_name.split("obs_etf_")[1].split("_otype:")[0]
+            fid = parts
+            site_mass[fid] = site_mass.get(fid, 0.0) + w * w
+        return site_mass
+
+    @staticmethod
+    def _prior_scale_transformed(partrans, parval1, prior_scale_raw):
+        """Convert a raw parameter-space scale to the transformed space used by PI equations."""
+        if partrans != "log":
+            return prior_scale_raw
+        # Log-transform: approximate scale via symmetric finite difference
+        v = float(parval1)
+        delta = float(prior_scale_raw)
+        if v <= 0 or delta <= 0:
+            return max(delta, 1e-10)
+        v_lo = max(v - delta, 1e-10)
+        v_hi = v + delta
+        scale = abs(np.log10(v_hi) - np.log10(v_lo)) / 2.0
+        return max(scale, 1e-10)
+
+    def _regularization_param_groups(self):
+        """Return the list of parameter groups to regularize."""
+        configured = getattr(self.config, "prior_regularization_params", None)
+        if configured:
+            return list(configured)
+        return ["aw", "ndvi_k", "ndvi_0", "mad", "ks_alpha", "kr_alpha"]
+
+    def add_regularization(self) -> None:
+        """Add phi-balanced Tikhonov prior information equations.
+
+        PI weights are scaled so the total prior phi contribution per site
+        equals ``prior_regularization_fraction`` of that site's ETf information
+        mass (sum of ETf weight²). This ensures the prior pull is proportional
+        to the observation signal strength and prevents parameters with large
+        raw scales (like ``aw``) from being effectively unregularized.
+
+        Emits ``regularization_audit.csv`` beside the .pst for inspection.
+        """
+        f_prior = getattr(self.config, "prior_regularization_fraction", 0.2)
+        reg_groups = set(self._regularization_param_groups())
+        init_pars = self.initial_parameter_dict()
+
+        pst = Pst(self.pst_file)
+        par = pst.parameter_data
+
+        # Step 1: site-local ETf information mass
+        site_mass = self._etf_information_mass_by_site(pst)
+
+        # Step 2: count regularized parameters per site
+        site_param_count = {}
+        for pargp in reg_groups:
+            if pargp not in init_pars:
+                continue
+            target_params = par.loc[par["pargp"] == pargp]
+            for par_name, row in target_params.iterrows():
+                fid = par_name.split(":")[1].replace(f"{row['pname']}_{row['pargp']}_", "")
+                fid = fid[:-1]
+                site_param_count[fid] = site_param_count.get(fid, 0) + 1
+
+        # Step 3: add PI equations with phi-balanced weights
+        audit_rows = []
+        n_pi = 0
+
+        for pargp, values in init_pars.items():
+            if pargp not in reg_groups:
+                continue
+            prior_std_raw = values["std"]
+            target_params = par.loc[par["pargp"] == pargp].copy()
 
             for par_name, row in target_params.iterrows():
                 fid = par_name.split(":")[1].replace(f"{row['pname']}_{row['pargp']}_", "")
                 fid = fid[:-1]
-                prior_val = row["parval1"]
-                rhs = np.log10(prior_val) if is_log else prior_val
-                weight = 1.0 / (prior_std**2)
 
-                pst.add_pi_equation(
-                    par_names=[par_name],
-                    pilbl=f"pi_{pargp}_{fid}",
-                    rhs=rhs,
-                    weight=weight,
-                    obs_group=f"pi_{pargp}",
+                partrans = row["partrans"]
+                prior_val = float(row["parval1"])
+                rhs = np.log10(prior_val) if partrans == "log" else prior_val
+
+                # Compute phi-balanced weight
+                I_s = site_mass.get(fid, 0.0)
+                n_s = site_param_count.get(fid, 1)
+                B_s = f_prior * I_s  # site prior budget
+                B_sp = B_s / n_s  # per-parameter budget
+
+                delta_trans = self._prior_scale_transformed(partrans, prior_val, prior_std_raw)
+
+                if B_sp > 0 and delta_trans > 0:
+                    weight = np.sqrt(B_sp) / delta_trans
+                else:
+                    weight = 0.0
+
+                if weight > 0:
+                    pst.add_pi_equation(
+                        par_names=[par_name],
+                        pilbl=f"pi_{pargp}_{fid}",
+                        rhs=rhs,
+                        weight=weight,
+                        obs_group=f"pi_{pargp}",
+                    )
+                    n_pi += 1
+
+                audit_rows.append(
+                    {
+                        "fid": fid,
+                        "par_name": par_name,
+                        "pargp": pargp,
+                        "partrans": partrans,
+                        "prior_value": prior_val,
+                        "prior_scale_raw": prior_std_raw,
+                        "prior_scale_trans": delta_trans,
+                        "etf_info_mass": I_s,
+                        "site_prior_budget": B_s,
+                        "param_budget": B_sp,
+                        "pi_weight": weight,
+                    }
                 )
 
         pst.reg_data.phimlim = sum(len(c) for c in self.etf_capture_indexes)
         pst.reg_data.phimaccept = 1.1 * pst.reg_data.phimlim
 
         pst.write(self.pst_file, version=2)
+
+        # Emit audit CSV
+        if audit_rows:
+            audit_df = pd.DataFrame(audit_rows)
+            audit_path = os.path.join(self.pest_dir, "regularization_audit.csv")
+            audit_df.to_csv(audit_path, index=False)
+
+        # Summary
+        if site_mass:
+            median_mass = np.median(list(site_mass.values()))
+            median_budget = f_prior * median_mass
+        else:
+            median_mass = 0
+            median_budget = 0
+        weights_by_group = {}
+        for r in audit_rows:
+            weights_by_group.setdefault(r["pargp"], []).append(r["pi_weight"])
+        print(f"  Regularization: {n_pi} PI equations, f_prior={f_prior}")
+        print(f"    ETf info mass: median={median_mass:.0f}, sites={len(site_mass)}")
+        print(f"    Prior budget: median={median_budget:.0f}")
+        for g in sorted(weights_by_group):
+            ws = weights_by_group[g]
+            print(
+                f"    {g:>12}: median_weight={np.median(ws):.2f}, "
+                f"min={min(ws):.2f}, max={max(ws):.2f}"
+            )
 
     def _drop_conflicts(self, i: int, fid: str) -> None:
         pdc = pd.read_csv(self.conflicted_obs, index_col=0)

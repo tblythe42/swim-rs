@@ -50,6 +50,7 @@ class BatchContext:
     noptmax: int
     batch_size: int
     toml_path: str
+    prior_params_path: str | None = None
 
 
 def resolve_context(
@@ -62,6 +63,7 @@ def resolve_context(
     workers=None,
     realizations=None,
     noptmax=3,
+    prior_params_path=None,
 ) -> BatchContext:
     """Build a BatchContext from a SWIM-RS .toml config file.
 
@@ -127,6 +129,7 @@ def resolve_context(
         noptmax=noptmax,
         batch_size=batch_size,
         toml_path=str(os.path.abspath(toml_path)),
+        prior_params_path=str(os.path.abspath(prior_params_path)) if prior_params_path else None,
     )
 
 
@@ -215,7 +218,7 @@ def _verify_prior_health(ctx: BatchContext):
 # ---------------------------------------------------------------------------
 
 
-def _do_build(config, container, batch_id, noptmax, reals):
+def _do_build(config, container, batch_id, noptmax, reals, prior_params_path=None):
     """Run the PestBuilder sequence. Returns on success, raises on failure."""
     from swimrs.calibrate.pest_builder import PestBuilder
 
@@ -231,6 +234,10 @@ def _do_build(config, container, batch_id, noptmax, reals):
         )
         print(f"  Batch {batch_id:03d}: build_localizer...")
         builder.build_localizer()
+        if prior_params_path is not None:
+            print(f"  Batch {batch_id:03d}: add_regularization (prior: {prior_params_path})...")
+            builder.apply_prior_params(prior_params_path)
+            builder.add_regularization()
         print(f"  Batch {batch_id:03d}: write_control_settings...")
         builder.write_control_settings(noptmax=noptmax, reals=reals)
         print(f"  Batch {batch_id:03d}: done.")
@@ -271,7 +278,14 @@ def build_batch(ctx: BatchContext, batch_fids, batch_id):
     config, container = _open_and_subset(ctx.toml_path, ctx.container_path, batch_dir, batch_fids)
 
     try:
-        _do_build(config, container, batch_id, ctx.noptmax, ctx.realizations)
+        _do_build(
+            config,
+            container,
+            batch_id,
+            ctx.noptmax,
+            ctx.realizations,
+            prior_params_path=ctx.prior_params_path,
+        )
         return {
             "status": "built",
             "n_fields": len(batch_fids),
@@ -320,7 +334,14 @@ def build_batch(ctx: BatchContext, batch_fids, batch_id):
 
     config, container = _open_and_subset(ctx.toml_path, ctx.container_path, batch_dir, remaining)
     try:
-        _do_build(config, container, batch_id, ctx.noptmax, ctx.realizations)
+        _do_build(
+            config,
+            container,
+            batch_id,
+            ctx.noptmax,
+            ctx.realizations,
+            prior_params_path=ctx.prior_params_path,
+        )
         return {
             "status": "built",
             "n_fields": len(remaining),
@@ -1047,6 +1068,12 @@ def build_batch_parser() -> argparse.ArgumentParser:
     parser.add_argument("--container", type=str, default=None, help="Override container path")
     parser.add_argument("--output", type=str, default=None, help="Override output directory")
     parser.add_argument("--shapefile", type=str, default=None, help="Override fields shapefile")
+    parser.add_argument(
+        "--prior-params",
+        type=str,
+        default=None,
+        help="Path to JSON with LULC-specific prior parameter values for Tikhonov regularization",
+    )
     return parser
 
 
@@ -1069,6 +1096,7 @@ def main(argv=None):
         workers=args.workers,
         realizations=args.reals,
         noptmax=args.noptmax,
+        prior_params_path=args.prior_params,
     )
 
     action = args.action
