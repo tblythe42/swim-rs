@@ -232,12 +232,12 @@ def _do_build(config, container, batch_id, noptmax, reals, prior_params_path=Non
             target_etf=config.etf_target_model or "ssebop",
             members=config.etf_ensemble_members,
         )
-        print(f"  Batch {batch_id:03d}: build_localizer...")
-        builder.build_localizer()
         if prior_params_path is not None:
             print(f"  Batch {batch_id:03d}: add_regularization (prior: {prior_params_path})...")
             builder.apply_prior_params(prior_params_path)
             builder.add_regularization()
+        print(f"  Batch {batch_id:03d}: build_localizer...")
+        builder.build_localizer()
         print(f"  Batch {batch_id:03d}: write_control_settings...")
         builder.write_control_settings(noptmax=noptmax, reals=reals)
         print(f"  Batch {batch_id:03d}: done.")

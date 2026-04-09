@@ -888,9 +888,11 @@ if __name__ == "__main__":
 
         localizer = df.copy()
 
-        # TODO: fix this
-        # most brittle lines of code ever written
-        sites = list(set(["_".join(i.split("_")[2:-3]) for i in df.index]))
+        # Parse site IDs from ETf/SWE observation names (skip PI rows)
+        # TODO: replace with explicit observation name parsers
+        sites = list(
+            set(["_".join(i.split("_")[2:-3]) for i in df.index if not i.startswith("pi_")])
+        )
 
         track = {k: [] for k in sites}
 
@@ -922,6 +924,26 @@ if __name__ == "__main__":
                     )
                     localizer.loc[idx, cols] = 1.0
 
+        # Localize PI equations: each pi_{pargp}_{fid} row gets 1.0 only
+        # for the matching parameter column (same site, same group).
+        pi_rows_localized = 0
+        pi_rows_total = 0
+        for obs_name in localizer.index:
+            if not obs_name.startswith("pi_"):
+                continue
+            pi_rows_total += 1
+            # Parse: pi_{pargp}_{fid}
+            parts = obs_name.split("_", 2)  # ['pi', pargp, fid]
+            if len(parts) < 3:
+                continue
+            pi_pargp = parts[1]
+            pi_fid = parts[2]
+            # Find the matching parameter column
+            matching_cols = [c for c in localizer.columns if f"{pi_pargp}_{pi_fid}" in c]
+            if matching_cols:
+                localizer.loc[obs_name, matching_cols] = 1.0
+                pi_rows_localized += 1
+
         vals = localizer.values.copy()
         vals[np.isnan(vals)] = 0.0
         vals[vals < 1.0] = 0.0
@@ -936,6 +958,8 @@ if __name__ == "__main__":
             "tracked_irrigation_years": track,
             "parameter_groups": list(pdict.keys()),
             "column_sums": col_sums,
+            "pi_rows_total": pi_rows_total,
+            "pi_rows_localized": pi_rows_localized,
         }
         summary_file = os.path.join(os.path.dirname(self.pst_file), "localizer_summary.json")
         with open(summary_file, "w") as f:
