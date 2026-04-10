@@ -35,25 +35,24 @@ MIN_PAIRS = 10  # minimum matched obs to compute metrics
 ETF_LO, ETF_HI = 0.05, 2.0
 
 
-def _flux_path(sid: str) -> Path | None:
-    for d in FLUX_DIRS:
-        p = d / f"{sid}_daily_data.csv"
-        if p.exists():
-            return p
-    return None
-
-
 def _load_flux_et(sid: str) -> pd.Series | None:
-    """Return daily ET_corr Series indexed by date, or None if unavailable."""
-    path = _flux_path(sid)
-    if path is None:
-        return None
-    df = pd.read_csv(path, parse_dates=["date"])
-    col = "ET_corr" if "ET_corr" in df.columns else ("ET" if "ET" in df.columns else None)
-    if col is None:
-        return None
-    s = df.set_index("date")[col].dropna()
-    return s if len(s) > 0 else None
+    """Return daily ET_corr Series indexed by date, or None if unavailable.
+
+    Scans all networks for files containing ET_corr.  Rejects files that only
+    have ET (different benchmark definition).  If the site appears in multiple
+    networks, the first network in FLUX_DIRS that provides ET_corr wins.
+    """
+    candidates = [
+        d / f"{sid}_daily_data.csv" for d in FLUX_DIRS if (d / f"{sid}_daily_data.csv").exists()
+    ]
+    for path in candidates:
+        df = pd.read_csv(path, parse_dates=["date"])
+        if "ET_corr" not in df.columns:
+            continue
+        s = df.set_index("date")["ET_corr"].dropna()
+        if len(s) > 0:
+            return s
+    return None
 
 
 def calc_metrics(obs: np.ndarray, mod: np.ndarray) -> dict:

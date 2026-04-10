@@ -54,24 +54,16 @@ kc_proxy = "etf"
 cover_proxy = "ndvi"
 
 [calibration]
-pest_run_dir = "{project_workspace}/pestrun"
+pest_run_dir = "{project_workspace}/pestrun_merged_pilot"
 workers = 20
-realizations = 200
+realizations = 20
 calibration_dir = "{pest_run_dir}/pest/mult"
 obs_folder = "{pest_run_dir}/obs"
 initial_values_csv = "{pest_run_dir}/params.csv"
 spinup = "{pest_run_dir}/spinup.json"
 
-# Regularization: fraction of ETf info mass allocated to prior penalty
 prior_regularization_fraction = 0.8
 
-# --- Experiment A: Landsat PT-JPL only (default) ---
+# --- Experiment D: merged LS/ECO PT-JPL (18-site pilot) ---
 etf_target_model = "ptjpl"
-
-# --- Experiment B: ECOSTRESS PT-JPL only ---
-# etf_target_model = "ptjpl"
-# etf_target_instrument = "ecostress"
-
-# --- Experiment C: Combined Landsat + ECOSTRESS ---
-# etf_target_model = "ensemble"
-# etf_ensemble_members = ["ptjpl"]
+etf_target_instrument = "merged"

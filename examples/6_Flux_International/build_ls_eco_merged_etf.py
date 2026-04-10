@@ -85,6 +85,10 @@ def main():
     eco_all = root["remote_sensing/etf/ecostress/ptjpl/no_mask"][:, pilot_idx]
     container.close()
 
+    # Clear stale CSVs before writing so old year files cannot survive a rerun.
+    if OUT_ETF_DIR.exists():
+        for stale in OUT_ETF_DIR.glob("*.csv"):
+            stale.unlink()
     OUT_ETF_DIR.mkdir(parents=True, exist_ok=True)
     AUDIT_CSV.parent.mkdir(parents=True, exist_ok=True)
 

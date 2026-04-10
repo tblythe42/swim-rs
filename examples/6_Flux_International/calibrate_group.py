@@ -11,9 +11,10 @@ from swimrs.container import SwimContainer
 from swimrs.swim.config import ProjectConfig
 
 
-def _load_config(calibrate: bool = True) -> ProjectConfig:
+def _load_config(calibrate: bool = True, conf_path: Path | None = None) -> ProjectConfig:
     project_dir = Path(__file__).resolve().parent
-    conf_path = project_dir / "6_Flux_International.toml"
+    if conf_path is None:
+        conf_path = project_dir / "6_Flux_International.toml"
 
     cfg = ProjectConfig()
     if os.path.isdir("/data/ssd2/swim"):
@@ -44,8 +45,9 @@ def run_group_calibration(
     realizations: int | None = None,
     overwrite: bool = False,
     pdc_remove: bool = False,
+    conf_path: Path | None = None,
 ) -> None:
-    cfg = _load_config(calibrate=True)
+    cfg = _load_config(calibrate=True, conf_path=conf_path)
 
     sites = _site_ids(cfg, select_sites)
     if not sites:
@@ -144,6 +146,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Calibrate 6_Flux_International with PEST++ IES")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to TOML config (default: 6_Flux_International.toml)",
+    )
     parser.add_argument("--sites", type=str, default=None, help="Comma-separated site IDs (subset)")
     parser.add_argument("--workers", type=int, default=None, help="Override worker count")
     parser.add_argument("--realizations", type=int, default=None, help="Override realizations")
@@ -159,4 +167,5 @@ if __name__ == "__main__":
         realizations=args.realizations,
         overwrite=args.overwrite,
         pdc_remove=args.pdc_remove,
+        conf_path=Path(args.config) if args.config else None,
     )
