@@ -1,0 +1,177 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "pandas",
+#   "geopandas",
+#   "rasterio",
+#   "rasterstats",
+#   "shapely",
+#   "fiona",
+# ]
+# ///
+"""Extract ETF values from downloaded ESPA rasters to site polygons.
+
+Scans extracted order directories for *_ETF.tif files, parses acquisition
+dates from Landsat product ID filenames, runs zonal_stats on the site
+polygon, and writes per-site-year intermediate JSON files.
+
+Example:
+    uv run examples/6_Flux_International/espa/espa_extract_etf.py \
+        --manifest /data/ssd1/swim/6_Flux_International/data/remote_sensing/espa/espa_manifest.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+import geopandas as gpd
+import pandas as pd
+import rasterio
+from rasterstats import zonal_stats
+from shapely.geometry import mapping
+
+DEFAULT_SHP = Path("/data/ssd1/swim/6_Flux_International/data/gis/flux_intl_150m_23MAR2026.shp")
+
+# Matches Landsat product ID prefix to extract acquisition date
+# e.g. LC08_L2SP_042028_20200715_20200722_02_T1_ETF.tif
+ETF_RE = re.compile(r"(LT04|LT05|LE07|LC08|LC09)_L2\w{2}_\d{6}_(\d{8})_\d{8}_\d{2}_\w+_ETF\.tif$")
+
+ETF_SCALE_FACTOR = 0.0001
+PLAUSIBLE_ETF_RANGE = (-0.1, 2.5)
+
+
+def _load_site_geometries(shapefile: Path) -> gpd.GeoDataFrame:
+    gdf = gpd.read_file(shapefile, engine="fiona").to_crs(epsg=4326)
+    return gdf.set_index("sid", drop=False)
+
+
+def _find_etf_tifs(extract_dir: Path) -> list[tuple[Path, str]]:
+    results = []
+    if not extract_dir.exists():
+        return results
+    for tif in extract_dir.rglob("*_ETF.tif"):
+        m = ETF_RE.match(tif.name)
+        if m:
+            date_str = m.group(2)  # YYYYMMDD
+            results.append((tif, date_str))
+    return sorted(results, key=lambda x: x[1])
+
+
+def _reproject_polygon(geom_4326, raster_crs) -> dict:
+    """Reproject a 4326 geometry to the raster's CRS and return GeoJSON mapping."""
+    gs = gpd.GeoSeries([geom_4326], crs="EPSG:4326").to_crs(raster_crs)
+    return mapping(gs.iloc[0])
+
+
+def extract_site_year(
+    site: str,
+    extract_dir: Path,
+    site_geom_4326,
+) -> dict[str, dict]:
+    tifs = _find_etf_tifs(extract_dir)
+    if not tifs:
+        return {}
+
+    # Cache reprojected polygon per raster CRS
+    reprojected_cache: dict[str, dict] = {}
+    date_values: dict[str, dict] = {}
+
+    for tif_path, date_str in tifs:
+        with rasterio.open(tif_path) as src:
+            raster_crs = src.crs
+
+        crs_key = str(raster_crs)
+        if crs_key not in reprojected_cache:
+            reprojected_cache[crs_key] = _reproject_polygon(site_geom_4326, raster_crs)
+        poly_native = reprojected_cache[crs_key]
+
+        stats = zonal_stats(
+            poly_native,
+            str(tif_path),
+            stats=["count", "mean", "std", "min", "max"],
+            geojson_out=False,
+        )
+        if not stats or not stats[0] or stats[0].get("count", 0) == 0:
+            continue
+
+        result = stats[0]
+        # Apply ESPA scale factor to convert raw integers to physical ETF
+        for key in ("mean", "std", "min", "max"):
+            if result.get(key) is not None:
+                result[key] = result[key] * ETF_SCALE_FACTOR
+
+        mean_val = result.get("mean")
+        if mean_val is not None:
+            if mean_val < PLAUSIBLE_ETF_RANGE[0] or mean_val > PLAUSIBLE_ETF_RANGE[1]:
+                continue
+
+        date_key = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        date_values[date_key] = result
+
+    return date_values
+
+
+def extract_all(manifest_path: Path, shapefile: Path = DEFAULT_SHP) -> None:
+    manifest = pd.read_csv(manifest_path, dtype=str)
+    site_gdf = _load_site_geometries(shapefile)
+    extracts_dir = manifest_path.parent / "extracts" / "etf_json"
+    extracts_dir.mkdir(parents=True, exist_ok=True)
+
+    # Only process fully downloaded site-years (download_status == "complete")
+    downloadable = manifest[manifest["download_status"] == "complete"]
+    already_extracted = downloadable["extract_status"].isin(["etf_extracted", "no_etf"])
+    extractable = downloadable[~already_extracted]
+
+    if extractable.empty:
+        print("No extracted orders to process.")
+        return
+
+    print(f"Extracting ETF from {len(extractable)} site-years...")
+
+    for idx, row in extractable.iterrows():
+        site = row["site"]
+        year = row["year"]
+        extract_dir = Path(row["output_dir"]) / "extract"
+
+        if site not in site_gdf.index:
+            print(f"  SKIP {site}/{year}: site not in shapefile")
+            continue
+
+        json_path = extracts_dir / f"{site}_{year}_etf.json"
+        if json_path.exists():
+            print(f"  SKIP {site}/{year}: already extracted")
+            continue
+
+        site_geom = site_gdf.loc[site].geometry
+        values = extract_site_year(site, extract_dir, site_geom)
+
+        if values:
+            with open(json_path, "w") as f:
+                json.dump({site: values}, f, indent=2)
+            print(f"  {site}/{year}: {len(values)} dates")
+        else:
+            print(f"  {site}/{year}: no valid ETF observations")
+
+        manifest.at[idx, "extract_status"] = "etf_extracted" if values else "no_etf"
+
+    manifest.to_csv(manifest_path, index=False)
+    print(f"\nManifest updated: {manifest_path}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Extract ETF from ESPA rasters")
+    parser.add_argument("--manifest", required=True, help="Path to espa_manifest.csv")
+    parser.add_argument("--shapefile", default=str(DEFAULT_SHP), help="Example 6 shapefile")
+    args = parser.parse_args()
+
+    extract_all(
+        manifest_path=Path(args.manifest),
+        shapefile=Path(args.shapefile),
+    )
+
+
+if __name__ == "__main__":
+    main()
