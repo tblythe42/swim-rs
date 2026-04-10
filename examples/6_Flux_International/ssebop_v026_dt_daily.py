@@ -40,17 +40,34 @@ def build_dt_daily(
     dt_min=6.0,
     dt_max=25.0,
     elev_source="USGS/SRTMGL1_003",
+    region_geojson=None,
     project="ee-dgketchum",
 ):
     """Build daily dT images and export to EE asset collection."""
     ee.Initialize(project=project)
 
+    # Load export region
+    export_region = None
+    if region_geojson:
+        import json as _json
+
+        with open(region_geojson) as f:
+            rj = _json.load(f)
+        if rj.get("type") == "FeatureCollection":
+            export_region = ee.FeatureCollection(rj).geometry()
+        else:
+            export_region = ee.Geometry(rj)
+        print(f"  Export region: {region_geojson}")
+
     # Ensure output collection exists
     try:
         ee.data.createAsset({"type": "ImageCollection"}, output_coll)
         print(f"Created asset collection: {output_coll}")
-    except ee.ee_exception.EEException:
-        pass  # already exists
+    except ee.ee_exception.EEException as e:
+        if "already exists" in str(e).lower():
+            pass
+        else:
+            raise
 
     elev = ee.Image(elev_source).select("elevation")
 
@@ -140,13 +157,16 @@ def build_dt_daily(
         desc = f"dt_daily_{date_str.replace('-', '')}"
         asset_id = f"{output_coll}/{desc}"
 
-        task = ee.batch.Export.image.toAsset(
+        export_kwargs = dict(
             image=dt_img,
             description=desc,
             assetId=asset_id,
             scale=11132,
             maxPixels=1e10,
         )
+        if export_region is not None:
+            export_kwargs["region"] = export_region
+        task = ee.batch.Export.image.toAsset(**export_kwargs)
 
         try:
             task.start()
@@ -188,6 +208,7 @@ def main():
     parser.add_argument("--dt-min", type=float, default=6.0)
     parser.add_argument("--dt-max", type=float, default=25.0)
     parser.add_argument("--elev-source", default="USGS/SRTMGL1_003")
+    parser.add_argument("--region", default=None, help="GeoJSON file for export region")
     parser.add_argument("--project", default="ee-dgketchum")
     args = parser.parse_args()
 
@@ -207,6 +228,7 @@ def main():
         dt_min=args.dt_min,
         dt_max=args.dt_max,
         elev_source=args.elev_source,
+        region_geojson=args.region,
         project=args.project,
     )
 

@@ -29,17 +29,34 @@ def build_dt_climatology(
     end_year,
     stat="median",
     scale_factor=None,
+    region_geojson=None,
     project="ee-dgketchum",
 ):
     """Reduce daily dT to DOY climatology and export to EE asset collection."""
     ee.Initialize(project=project)
 
+    # Load export region
+    export_region = None
+    if region_geojson:
+        import json as _json
+
+        with open(region_geojson) as f:
+            rj = _json.load(f)
+        if rj.get("type") == "FeatureCollection":
+            export_region = ee.FeatureCollection(rj).geometry()
+        else:
+            export_region = ee.Geometry(rj)
+        print(f"  Export region: {region_geojson}")
+
     # Ensure output collection exists
     try:
         ee.data.createAsset({"type": "ImageCollection"}, output_coll)
         print(f"Created asset collection: {output_coll}")
-    except ee.ee_exception.EEException:
-        pass  # already exists
+    except ee.ee_exception.EEException as e:
+        if "already exists" in str(e).lower():
+            pass
+        else:
+            raise
 
     src = ee.ImageCollection(daily_coll).filter(
         ee.Filter.calendarRange(start_year, end_year, "year")
@@ -87,13 +104,16 @@ def build_dt_climatology(
         desc = f"dt_climo_doy{doy:03d}"
         asset_id = f"{output_coll}/{desc}"
 
-        task = ee.batch.Export.image.toAsset(
+        export_kwargs = dict(
             image=climo_img,
             description=desc,
             assetId=asset_id,
             scale=11132,
             maxPixels=1e10,
         )
+        if export_region is not None:
+            export_kwargs["region"] = export_region
+        task = ee.batch.Export.image.toAsset(**export_kwargs)
         task.start()
 
         if doy % 50 == 0 or doy == 1:
@@ -110,6 +130,7 @@ def main():
     parser.add_argument("--end-year", type=int, required=True)
     parser.add_argument("--stat", default="median", choices=["mean", "median"])
     parser.add_argument("--scale-factor", type=float, default=None)
+    parser.add_argument("--region", default=None, help="GeoJSON file for export region")
     parser.add_argument("--project", default="ee-dgketchum")
     args = parser.parse_args()
 
@@ -120,6 +141,7 @@ def main():
         end_year=args.end_year,
         stat=args.stat,
         scale_factor=args.scale_factor,
+        region_geojson=args.region,
         project=args.project,
     )
 
