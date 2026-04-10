@@ -91,11 +91,23 @@ LANDSAT_COLLECTIONS = [
 ]
 
 # Default asset IDs — MUST be overridden for international use.
-# The Daymet dT and NALCMS land cover are CONUS-only.
-# Build global equivalents with ssebop_v026_tmax_climo.py + ssebop_v026_dt_daily.py
-# + ssebop_v026_dt_climo.py, then pass --dt-source and --lc-source.
+# Both Daymet dT and Daymet Tmax are CONUS-only.
+#
+# v0.2.6 API uses:
+#   dt_source    — DOY dT climatology collection
+#   tmax_source  — DOY Tmax climatology collection (used in ETf formula directly)
+#   tcorr_source — 'FANO' or float (Tcorr computation method)
+#
+# Build global equivalents via:
+#   ssebop_v026_tmax_climo.py → tmax climatology (also input to dt_daily)
+#   ssebop_v026_dt_daily.py   → daily dT
+#   ssebop_v026_dt_climo.py   → DOY dT climatology
+#
+# Then pass both --dt-source and --tmax-source.
 DEFAULT_DT_SOURCE = "projects/earthengine-legacy/assets/projects/usgs-ssebop/dt/daymet_median_v7"
-DEFAULT_LC_SOURCE = "USGS/NLCD_RELEASES/2020_REL/NALCMS"
+DEFAULT_TMAX_SOURCE = (
+    "projects/earthengine-legacy/assets/projects/usgs-ssebop/tmax/daymet_v4_mean_1981_2010"
+)
 
 
 def parse_scene_name(scene_id):
@@ -106,16 +118,20 @@ def parse_scene_name(scene_id):
     return scene_id.split("/")[-1]
 
 
-def extract_etf(scene_id, polygon, dt_source, lc_source, et_fraction_type):
-    """Compute v0.2.6 ETf for a single scene and return mean over polygon."""
+def extract_etf(scene_id, polygon, dt_source, tmax_source, et_fraction_type):
+    """Compute v0.2.6 ETf for a single scene and return mean over polygon.
+
+    v0.2.6 ETf = (-LST + Tmax*Tcorr + dT) / dT, so both dt_source and
+    tmax_source directly affect the result.
+    """
     name = parse_scene_name(scene_id)
     try:
         img = ssebop.Image.from_landsat_c2_sr(
             scene_id,
             dt_source=dt_source,
-            tcold_source="FANO",
+            tmax_source=tmax_source,
+            tcorr_source="FANO",
             et_fraction_type=et_fraction_type,
-            lc_source=lc_source,
         )
         etf = img.et_fraction
         result = etf.reduceRegion(
@@ -142,13 +158,13 @@ def main():
         "--dt-source",
         type=str,
         default=DEFAULT_DT_SOURCE,
-        help="EE ImageCollection ID for dT climatology",
+        help="EE ImageCollection ID for dT DOY climatology",
     )
     parser.add_argument(
-        "--lc-source",
+        "--tmax-source",
         type=str,
-        default=DEFAULT_LC_SOURCE,
-        help="EE land cover asset for FANO ag mask",
+        default=DEFAULT_TMAX_SOURCE,
+        help="EE ImageCollection ID for Tmax DOY climatology",
     )
     parser.add_argument(
         "--et-fraction-type", type=str, default="alfalfa", choices=["alfalfa", "grass"]
@@ -192,7 +208,7 @@ def main():
     print(f"  Sites: {len(sites)}, Years: {args.start_yr}-{args.end_yr}")
     print(f"  Todo: {len(todo)} site-years (skipping existing)")
     print(f"  dt_source: {args.dt_source}")
-    print(f"  lc_source: {args.lc_source}")
+    print(f"  tmax_source: {args.tmax_source}")
     print(f"  et_fraction_type: {args.et_fraction_type}")
     print(f"  Output: {out_dir}")
 
@@ -231,7 +247,7 @@ def main():
         names, values = [], []
         for sid in tqdm(scenes, desc=f"  {site} {year}", leave=False):
             name, val = extract_etf(
-                sid, polygon, args.dt_source, args.lc_source, args.et_fraction_type
+                sid, polygon, args.dt_source, args.tmax_source, args.et_fraction_type
             )
             names.append(name)
             values.append(val if val is not None else "")
