@@ -10,22 +10,21 @@
 # ///
 """Extract SSEBop ETf using openet-ssebop v0.2.6 for international sites.
 
-For international use, the default CONUS-only dT (Daymet) and land cover
-(NALCMS) assets must be replaced with global equivalents. Build a global dT
-climatology via the ssebop_v026_tmax_climo → dt_daily → dt_climo pipeline,
-then pass the asset ID via --dt-source.
+For international use, the default CONUS-only Daymet dT and Tmax climatologies
+must be replaced with global equivalents. v0.2.6 uses both tmax_source and
+dt_source directly in the ETf formula: ETf = (-LST + Tmax*Tcorr + dT) / dT.
 
 Per-scene reduceRegion + getInfo() avoids projection errors from mixed CRS.
 Writes one CSV per site-year to local disk.
 
 Prerequisites for international sites:
-    1. Build Tmax climatology (ssebop_v026_tmax_climo.py)
-    2. Build daily dT (ssebop_v026_dt_daily.py)
+    1. Build Tmax DOY climatology (ssebop_v026_tmax_climo.py)
+    2. Build daily dT (ssebop_v026_dt_daily.py) — uses Tmax climo as input
     3. Build dT DOY climatology (ssebop_v026_dt_climo.py)
-    4. Pass the dT climo asset via --dt-source
+    4. Pass both --tmax-source and --dt-source to this script
 
 Usage:
-    uv run ssebop_v026_etf.py --dt-source <custom_dt_climo> --sites US-ARM,DE-Kli
+    uv run ssebop_v026_etf.py --tmax-source <tmax_climo> --dt-source <dt_climo> --sites US-ARM,DE-Kli
     uv run ssebop_v026_etf.py --start-yr 2020 --end-yr 2022
 """
 
