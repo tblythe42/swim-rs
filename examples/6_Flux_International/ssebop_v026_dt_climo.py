@@ -34,6 +34,13 @@ def build_dt_climatology(
     """Reduce daily dT to DOY climatology and export to EE asset collection."""
     ee.Initialize(project=project)
 
+    # Ensure output collection exists
+    try:
+        ee.data.createAsset({"type": "ImageCollection"}, output_coll)
+        print(f"Created asset collection: {output_coll}")
+    except ee.ee_exception.EEException:
+        pass  # already exists
+
     src = ee.ImageCollection(daily_coll).filter(
         ee.Filter.calendarRange(start_year, end_year, "year")
     )

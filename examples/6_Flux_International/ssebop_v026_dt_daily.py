@@ -45,6 +45,13 @@ def build_dt_daily(
     """Build daily dT images and export to EE asset collection."""
     ee.Initialize(project=project)
 
+    # Ensure output collection exists
+    try:
+        ee.data.createAsset({"type": "ImageCollection"}, output_coll)
+        print(f"Created asset collection: {output_coll}")
+    except ee.ee_exception.EEException:
+        pass  # already exists
+
     elev = ee.Image(elev_source).select("elevation")
 
     sdt = datetime.strptime(start_date, "%Y-%m-%d")

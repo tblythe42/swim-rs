@@ -35,6 +35,13 @@ def build_tmax_climatology(
     """Build DOY Tmax climatology and export to EE asset collection."""
     ee.Initialize(project=project)
 
+    # Ensure output collection exists
+    try:
+        ee.data.createAsset({"type": "ImageCollection"}, output_coll)
+        print(f"Created asset collection: {output_coll}")
+    except ee.ee_exception.EEException:
+        pass  # already exists
+
     src = ee.ImageCollection(source_coll).select(source_band)
 
     # Filter to year range
@@ -48,13 +55,14 @@ def build_tmax_climatology(
     else:
         raise ValueError(f"Unknown source_units: {source_units}")
 
-    # Optional environmental lapse rate correction
+    # ELR correction is not implemented here. The upstream v0.2.6 uses
+    # model.elr_adjust() which corrects locally elevated terrain relative
+    # to surrounding relief, not a blanket lapse-rate subtraction. If ELR
+    # is needed, use openet.ssebop.model.elr_adjust() on the output.
     if elr:
-        dem = ee.Image("USGS/SRTMGL1_003").select("elevation")
-        # Standard lapse rate: 6.5 K/km
-        elr_correction = dem.multiply(6.5 / 1000.0)
-        src = src.map(
-            lambda img: img.subtract(elr_correction).copyProperties(img, img.propertyNames())
+        raise NotImplementedError(
+            "ELR correction requires openet.ssebop.model.elr_adjust() — "
+            "not a simple lapse-rate subtraction. Omit --elr for now."
         )
 
     print(f"Building {stat} Tmax climatology for DOY 1-366")

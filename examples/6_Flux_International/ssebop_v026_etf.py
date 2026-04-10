@@ -10,20 +10,23 @@
 # ///
 """Extract SSEBop ETf using openet-ssebop v0.2.6 for international sites.
 
-Uses custom Tmax and dT climatology assets built from ERA5-Land (global),
-replacing the CONUS-only Daymet defaults. Per-scene reduceRegion + getInfo()
-avoids projection errors from mixed CRS inputs.
+For international use, the default CONUS-only dT (Daymet) and land cover
+(NALCMS) assets must be replaced with global equivalents. Build a global dT
+climatology via the ssebop_v026_tmax_climo → dt_daily → dt_climo pipeline,
+then pass the asset ID via --dt-source.
 
+Per-scene reduceRegion + getInfo() avoids projection errors from mixed CRS.
 Writes one CSV per site-year to local disk.
 
-Requires:
-    1. Tmax climatology asset (from ssebop_v026_tmax_climo.py)
-    2. dT climatology asset (from ssebop_v026_dt_climo.py)
+Prerequisites for international sites:
+    1. Build Tmax climatology (ssebop_v026_tmax_climo.py)
+    2. Build daily dT (ssebop_v026_dt_daily.py)
+    3. Build dT DOY climatology (ssebop_v026_dt_climo.py)
+    4. Pass the dT climo asset via --dt-source
 
 Usage:
-    uv run ssebop_v026_etf.py
-    uv run ssebop_v026_etf.py --sites US-ARM,DE-Kli --start-yr 2020 --end-yr 2022
-    uv run ssebop_v026_etf.py --dt-source projects/ee-dgketchum/assets/ssebop/dt_era5land_median_2000_2020
+    uv run ssebop_v026_etf.py --dt-source <custom_dt_climo> --sites US-ARM,DE-Kli
+    uv run ssebop_v026_etf.py --start-yr 2020 --end-yr 2022
 """
 
 import csv
@@ -87,7 +90,10 @@ LANDSAT_COLLECTIONS = [
     "LANDSAT/LC09/C02/T1_L2",
 ]
 
-# Default asset IDs — override with CLI flags once assets are built
+# Default asset IDs — MUST be overridden for international use.
+# The Daymet dT and NALCMS land cover are CONUS-only.
+# Build global equivalents with ssebop_v026_tmax_climo.py + ssebop_v026_dt_daily.py
+# + ssebop_v026_dt_climo.py, then pass --dt-source and --lc-source.
 DEFAULT_DT_SOURCE = "projects/earthengine-legacy/assets/projects/usgs-ssebop/dt/daymet_median_v7"
 DEFAULT_LC_SOURCE = "USGS/NLCD_RELEASES/2020_REL/NALCMS"
 
