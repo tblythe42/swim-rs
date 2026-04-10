@@ -900,8 +900,10 @@ if __name__ == "__main__":
 
         track = {k: [] for k in sites}
 
-        # Date range from container
-        dt = list(pd.date_range(self._container.start_date, self._container.end_date, freq="D"))
+        # Date range from config — observations are indexed relative to config start/end,
+        # not the full container range. Using container dates here causes all-zero localizer
+        # when the config date range is a subset of the container (e.g. 2018-2025 vs 1987-2025).
+        dt = list(pd.date_range(self.config.start_dt, self.config.end_dt, freq="D"))
         years = list(range(self.config.start_dt.year, self.config.end_dt.year + 1))
 
         for s in sites:
