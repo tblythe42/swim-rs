@@ -884,7 +884,11 @@ if __name__ == "__main__":
 
         pnames = pst.parameter_data["parnme"].values
 
-        df = Matrix.from_names(pst.nnz_obs_names, pnames).to_dataframe()
+        # Include both non-zero-weight observations AND prior information
+        # equations in the localizer. pyemu's nnz_obs_names only covers
+        # observation_data, not prior_information.
+        all_obs_names = pst.nnz_obs_names + pst.prior_names
+        df = Matrix.from_names(all_obs_names, pnames).to_dataframe()
 
         localizer = df.copy()
 
