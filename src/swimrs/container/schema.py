@@ -21,6 +21,7 @@ class Instrument(str, Enum):
     SENTINEL = "sentinel"
     ECOSTRESS = "ecostress"
     COMBINED = "combined"  # Fused multi-instrument product
+    MERGED = "merged"  # Per-site bias-adjusted LS/ECO merged product
 
 
 class MaskType(str, Enum):
