@@ -884,11 +884,11 @@ if __name__ == "__main__":
 
         pnames = pst.parameter_data["parnme"].values
 
-        # Include both non-zero-weight observations AND prior information
-        # equations in the localizer. pyemu's nnz_obs_names only covers
-        # observation_data, not prior_information.
-        all_obs_names = pst.nnz_obs_names + pst.prior_names
-        df = Matrix.from_names(all_obs_names, pnames).to_dataframe()
+        # Localizer matrix covers non-zero-weight observations only.
+        # PI equations are NOT included — PEST++ IES handles prior information
+        # separately from the localizer. Including PI rows causes PEST++ to
+        # reject the localizer with "rows not found in observation names".
+        df = Matrix.from_names(pst.nnz_obs_names, pnames).to_dataframe()
 
         localizer = df.copy()
 
@@ -928,26 +928,6 @@ if __name__ == "__main__":
                     )
                     localizer.loc[idx, cols] = 1.0
 
-        # Localize PI equations: each pi_{pargp}_{fid} row gets 1.0 only
-        # for the matching parameter column (same site, same group).
-        pi_rows_localized = 0
-        pi_rows_total = 0
-        for obs_name in localizer.index:
-            if not obs_name.startswith("pi_"):
-                continue
-            pi_rows_total += 1
-            # Parse: pi_{pargp}_{fid}
-            parts = obs_name.split("_", 2)  # ['pi', pargp, fid]
-            if len(parts) < 3:
-                continue
-            pi_pargp = parts[1]
-            pi_fid = parts[2]
-            # Find the matching parameter column
-            matching_cols = [c for c in localizer.columns if f"{pi_pargp}_{pi_fid}" in c]
-            if matching_cols:
-                localizer.loc[obs_name, matching_cols] = 1.0
-                pi_rows_localized += 1
-
         vals = localizer.values.copy()
         vals[np.isnan(vals)] = 0.0
         vals[vals < 1.0] = 0.0
@@ -962,8 +942,7 @@ if __name__ == "__main__":
             "tracked_irrigation_years": track,
             "parameter_groups": list(pdict.keys()),
             "column_sums": col_sums,
-            "pi_rows_total": pi_rows_total,
-            "pi_rows_localized": pi_rows_localized,
+            "pi_note": "PI equations not in localizer — PEST++ IES handles them via ies_reg_factor",
         }
         summary_file = os.path.join(os.path.dirname(self.pst_file), "localizer_summary.json")
         with open(summary_file, "w") as f:
@@ -989,8 +968,14 @@ if __name__ == "__main__":
         pst.pestpp_options["ies_localizer"] = "loc.mat"
         pst.pestpp_options["ies_num_reals"] = reals
         pst.pestpp_options["ies_drop_conflicts"] = "true"
-        # pst.pestpp_options["ies_reg_factor"] = 0.25
-        # pst.pestpp_options["ies_use_approx"] = 'true'
+
+        # Enable IES regularization if PI equations are present.
+        # ies_reg_factor controls prior-to-measurement balance in the
+        # ensemble update — higher values pull parameters toward the
+        # initial ensemble (which was seeded from LULC priors).
+        if pst.nprior > 0:
+            reg_factor = getattr(self.config, "prior_regularization_fraction", 0.2)
+            pst.pestpp_options["ies_reg_factor"] = reg_factor
 
         # Tier 1 performance options
         pst.pestpp_options["num_tpl_ins_threads"] = 10
