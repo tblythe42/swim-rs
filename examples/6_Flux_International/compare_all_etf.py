@@ -39,20 +39,22 @@ def _load_flux_et(sid: str) -> pd.Series | None:
     """Return daily ET_corr Series indexed by date, or None if unavailable.
 
     Scans all networks for files containing ET_corr.  Rejects files that only
-    have ET (different benchmark definition).  If the site appears in multiple
-    networks, the first network in FLUX_DIRS that provides ET_corr wins.
+    have ET (different benchmark definition).  When a site appears in multiple
+    networks, returns the series with the most non-null ET_corr days so that
+    longer archives (e.g. ICOS over FluxNet for European sites) are preferred.
     """
     candidates = [
         d / f"{sid}_daily_data.csv" for d in FLUX_DIRS if (d / f"{sid}_daily_data.csv").exists()
     ]
+    best: pd.Series | None = None
     for path in candidates:
         df = pd.read_csv(path, parse_dates=["date"])
         if "ET_corr" not in df.columns:
             continue
         s = df.set_index("date")["ET_corr"].dropna()
-        if len(s) > 0:
-            return s
-    return None
+        if len(s) > 0 and (best is None or len(s) > len(best)):
+            best = s
+    return best
 
 
 def calc_metrics(obs: np.ndarray, mod: np.ndarray) -> dict:
