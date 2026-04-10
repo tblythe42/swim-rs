@@ -40,20 +40,28 @@ def _load_flux_et(sid: str) -> pd.Series | None:
 
     Scans all networks for files containing ET_corr.  Rejects files that only
     have ET (different benchmark definition).  When a site appears in multiple
-    networks, returns the series with the most non-null ET_corr days so that
-    longer archives (e.g. ICOS over FluxNet for European sites) are preferred.
+    networks, selects by most post-2018 ET_corr days (matching the ECOSTRESS
+    era), with total days as a tiebreaker.  This avoids picking a file with
+    zero ECOSTRESS-era coverage even when another network file has substantial
+    post-2018 data (e.g. CA-TP4 FluxNet 0 vs AmeriFlux 450 post-2018 days).
     """
+    ECO_START = pd.Timestamp("2018-01-01")
     candidates = [
         d / f"{sid}_daily_data.csv" for d in FLUX_DIRS if (d / f"{sid}_daily_data.csv").exists()
     ]
     best: pd.Series | None = None
+    best_key = (-1, -1)
     for path in candidates:
         df = pd.read_csv(path, parse_dates=["date"])
         if "ET_corr" not in df.columns:
             continue
         s = df.set_index("date")["ET_corr"].dropna()
-        if len(s) > 0 and (best is None or len(s) > len(best)):
-            best = s
+        if len(s) == 0:
+            continue
+        n_post2018 = int((s.index >= ECO_START).sum())
+        key = (n_post2018, len(s))
+        if key > best_key:
+            best, best_key = s, key
     return best
 
 
