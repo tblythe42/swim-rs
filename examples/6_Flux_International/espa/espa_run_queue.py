@@ -87,11 +87,10 @@ def run_queue(
     manifest_path: Path,
     cred_file: Path,
     shapefile: Path,
-    max_active: int = 10,
+    max_open_units: int = 10000,
     sleep_seconds: int = 300,
     once: bool = False,
 ) -> None:
-    auth_tuple = (cred_file,)  # just pass path to sub-functions
     iteration = 0
 
     while True:
@@ -132,7 +131,7 @@ def run_queue(
         # 5. Submit more orders if under cap
         print("\n--- Submit ---", flush=True)
         try:
-            _submit.submit_orders(manifest_path, cred_file, max_active=max_active)
+            _submit.submit_orders(manifest_path, cred_file, max_open_units=max_open_units)
         except Exception as e:
             print(f"  Submit error: {e}", flush=True)
 
@@ -172,7 +171,9 @@ def main() -> None:
         default="/data/ssd1/swim/6_Flux_International/data/gis/flux_intl_150m_23MAR2026.shp",
         help="Example 6 shapefile",
     )
-    parser.add_argument("--max-active", type=int, default=10, help="Max concurrent active orders")
+    parser.add_argument(
+        "--max-open-units", type=int, default=10000, help="Max scenes in processing (ESPA limit)"
+    )
     parser.add_argument("--sleep", type=int, default=300, help="Seconds between cycles")
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
     args = parser.parse_args()
@@ -181,7 +182,7 @@ def main() -> None:
         manifest_path=Path(args.manifest),
         cred_file=Path(args.credentials),
         shapefile=Path(args.shapefile),
-        max_active=args.max_active,
+        max_open_units=args.max_open_units,
         sleep_seconds=args.sleep,
         once=args.once,
     )

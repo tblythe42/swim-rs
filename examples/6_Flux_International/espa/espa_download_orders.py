@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import tarfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -47,15 +48,23 @@ def _get_item_status(auth: tuple[str, str], order_id: str) -> dict:
     return resp.json()
 
 
-def _download_file(url: str, dest: Path, auth: tuple[str, str]) -> bool:
-    resp = requests.get(url, auth=auth, stream=True, timeout=300)
-    resp.raise_for_status()
+def _download_file(url: str, dest: Path, auth: tuple[str, str], max_retries: int = 4) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(dest, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
-            if chunk:
-                f.write(chunk)
-    return True
+    for attempt in range(max_retries):
+        resp = requests.get(url, auth=auth, stream=True, timeout=300)
+        if resp.status_code == 429:
+            wait = 2 ** (attempt + 1)
+            print(f"      429 rate-limited, retrying in {wait}s...")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+        return True
+    resp.raise_for_status()  # raise on final failure
+    return False
 
 
 def _md5_file(path: Path) -> str:
@@ -89,9 +98,10 @@ def download_orders(
     auth = _load_credentials(cred_file)
     manifest = pd.read_csv(manifest_path, dtype=str)
 
-    downloadable = manifest[manifest["order_status"] == "ready_for_download"]
-    already_done = manifest["download_status"] == "complete"
-    downloadable = downloadable[~already_done]
+    downloadable = manifest[
+        (manifest["order_status"] == "ready_for_download")
+        & (manifest["download_status"] != "complete")
+    ]
 
     if downloadable.empty:
         print("No orders ready for download.")

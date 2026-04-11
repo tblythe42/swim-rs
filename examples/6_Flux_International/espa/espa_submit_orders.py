@@ -42,24 +42,17 @@ def _load_credentials(cred_file: Path) -> tuple[str, str]:
     return user, passwd
 
 
-def _get_active_order_count(auth: tuple[str, str]) -> int:
-    """Count orders that are not in a terminal state.
+def _count_open_units(manifest: pd.DataFrame) -> int:
+    """Count scenes in orders that haven't finished downloading.
 
-    The ESPA list-orders endpoint returns completed orders even when filtering
-    by non-terminal statuses, so we must check each order's actual status.
+    ESPA limits users to 10,000 open units (scenes) in processing. We count
+    from the manifest rather than hitting the API per-order, which doesn't
+    scale.
     """
-    terminal = {"complete", "cancelled", "purged"}
-    resp = requests.get(f"{ESPA_API}/list-orders", auth=auth, timeout=60)
-    resp.raise_for_status()
-    all_orders = resp.json()
-    active = 0
-    for oid in all_orders:
-        resp2 = requests.get(f"{ESPA_API}/order/{oid}", auth=auth, timeout=60)
-        resp2.raise_for_status()
-        status = resp2.json().get("status", "")
-        if status not in terminal:
-            active += 1
-    return active
+    has_order = manifest["order_id"].notna() & (manifest["order_id"] != "")
+    not_done = manifest["download_status"] != "complete"
+    open_rows = manifest[has_order & not_done]
+    return int(open_rows["n_scenes"].fillna(0).astype(int).sum())
 
 
 def _submit_order(auth: tuple[str, str], payload: dict) -> dict:
@@ -76,7 +69,7 @@ def _submit_order(auth: tuple[str, str], payload: dict) -> dict:
 def submit_orders(
     manifest_path: Path,
     cred_file: Path,
-    max_active: int = 10,
+    max_open_units: int = 10000,
     dry_run: bool = False,
 ) -> None:
     auth = _load_credentials(cred_file)
@@ -102,18 +95,20 @@ def submit_orders(
     print(f"Submittable site-years: {len(submittable)}")
 
     if not dry_run:
-        active = _get_active_order_count(auth)
-        print(f"Currently active orders: {active}")
+        open_units = _count_open_units(manifest)
+        print(f"Open units (scenes in processing): {open_units}/{max_open_units}")
     else:
-        active = 0
+        open_units = 0
 
     submitted = 0
     for idx, row in submittable.iterrows():
         site = row["site"]
         year = row["year"]
+        raw = row.get("n_scenes")
+        n_scenes = 0 if pd.isna(raw) or raw == "" else int(raw)
 
-        if not dry_run and active >= max_active:
-            print(f"Active order cap ({max_active}) reached. Stopping submissions.")
+        if not dry_run and open_units + n_scenes > max_open_units:
+            print(f"Unit cap ({max_open_units}) would be exceeded. Stopping submissions.")
             break
 
         payload_path = Path(row["payload_json"])
@@ -142,7 +137,7 @@ def submit_orders(
                     "response": result,
                 }
             )
-            active += 1
+            open_units += n_scenes
             submitted += 1
             print(f"  SUBMITTED {site}/{year}: {order_id}")
             time.sleep(SUBMIT_SLEEP)
@@ -181,14 +176,16 @@ def main() -> None:
         default=str(Path.home() / "usgs_pswd.txt"),
         help="USGS credentials file (user:password)",
     )
-    parser.add_argument("--max-active", type=int, default=10, help="Max concurrent active orders")
+    parser.add_argument(
+        "--max-open-units", type=int, default=10000, help="Max scenes in processing (ESPA limit)"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print what would be submitted")
     args = parser.parse_args()
 
     submit_orders(
         manifest_path=Path(args.manifest),
         cred_file=Path(args.credentials),
-        max_active=args.max_active,
+        max_open_units=args.max_open_units,
         dry_run=args.dry_run,
     )
 
