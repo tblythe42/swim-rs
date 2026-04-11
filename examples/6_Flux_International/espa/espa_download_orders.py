@@ -164,6 +164,10 @@ def download_orders(
                     bad_dir = output_dir / "bad"
                     bad_dir.mkdir(parents=True, exist_ok=True)
                     tarball_path.rename(bad_dir / tarball_path.name)
+                    # Clear any stale extraction sentinel for this tarball
+                    stale_sentinel = output_dir / ".extract_done" / f"{tarball_path.stem}.done"
+                    if stale_sentinel.exists():
+                        stale_sentinel.unlink()
                     print(f"    CHECKSUM FAILED {name} (quarantined)")
                     n_failed += 1
                     continue

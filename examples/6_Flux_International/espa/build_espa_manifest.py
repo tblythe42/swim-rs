@@ -120,13 +120,14 @@ def build_manifest(
     extents_dir.mkdir(parents=True, exist_ok=True)
 
     existing = None
-    if manifest_path.exists() and not overwrite:
+    if manifest_path.exists():
         existing = pd.read_csv(manifest_path, dtype=str)
+    existing_keys = set()
+    if existing is not None and not overwrite:
         existing_keys = set(zip(existing["site"], existing["year"].astype(str)))
-    else:
-        existing_keys = set()
 
     all_sites = sites or _get_sites(shapefile)
+    rebuild_keys = {(s, str(y)) for s in all_sites for y in range(start_year, end_year + 1)}
     source_dirs = [DEFAULT_NDVI_DIR, DEFAULT_PTJPL_DIR]
 
     # Load metadata once (10M rows) instead of per site-year
@@ -209,10 +210,12 @@ def build_manifest(
 
     new_df = pd.DataFrame(rows, columns=MANIFEST_COLUMNS)
 
-    # When rebuilding a subset of sites, preserve rows for non-selected sites
-    if existing is not None and sites is not None:
-        other_sites = existing[~existing["site"].isin(sites)]
-        manifest = pd.concat([other_sites, new_df], ignore_index=True)
+    # Preserve existing rows outside the rebuild scope (other sites, other years)
+    if existing is not None:
+        keep = existing[
+            ~existing.apply(lambda r: (r["site"], str(r["year"])) in rebuild_keys, axis=1)
+        ]
+        manifest = pd.concat([keep, new_df], ignore_index=True)
     else:
         manifest = new_df
 

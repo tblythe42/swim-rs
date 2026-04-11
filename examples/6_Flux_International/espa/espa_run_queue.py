@@ -63,6 +63,8 @@ def _cohort_summary(manifest_path: Path) -> dict:
     downloaded = mf["download_status"] == "complete"
     extracted = mf["extract_status"] == "etf_extracted"
     terminal_etf = mf["extract_status"].isin(["etf_extracted", "no_etf"])
+    csv_col = mf["csv_status"] if "csv_status" in mf.columns else pd.Series("", index=mf.index)
+    csv_done = (csv_col == "written") | (mf["extract_status"] == "no_etf")
     return {
         "total": int(total),
         "no_scenes": int(no_scenes.sum()) if hasattr(no_scenes, "sum") else int(no_scenes),
@@ -72,12 +74,13 @@ def _cohort_summary(manifest_path: Path) -> dict:
         "downloaded": int(downloaded.sum()),
         "extracted": int(extracted.sum()),
         "terminal": int(terminal_etf.sum()),
+        "csv_done": int(csv_done.sum()),
     }
 
 
 def _is_done(summary: dict) -> bool:
     actionable = summary["total"] - summary["no_scenes"]
-    return actionable > 0 and summary["terminal"] >= actionable
+    return actionable > 0 and summary["csv_done"] >= actionable
 
 
 def run_queue(

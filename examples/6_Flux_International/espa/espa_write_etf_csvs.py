@@ -34,6 +34,8 @@ def _date_key_to_column(date_key: str) -> str:
 
 def write_csvs(manifest_path: Path) -> None:
     manifest = pd.read_csv(manifest_path, dtype=str)
+    if "csv_status" not in manifest.columns:
+        manifest["csv_status"] = ""
     json_dir = manifest_path.parent / "extracts" / "etf_json"
     csv_dir = manifest_path.parent / "extracts" / "etf" / "no_mask"
     csv_dir.mkdir(parents=True, exist_ok=True)
@@ -92,6 +94,26 @@ def write_csvs(manifest_path: Path) -> None:
         df.to_csv(csv_path, index=False)
         written += 1
 
+        # Update manifest csv_status for this site-year
+        match = (manifest["site"] == site) & (manifest["year"] == year)
+        if match.any():
+            manifest.loc[match, "csv_status"] = "written"
+
+    # Also mark skipped (already up-to-date) rows
+    for jf in json_files:
+        stem = jf.stem
+        parts = stem.rsplit("_", 2)
+        if len(parts) < 3:
+            continue
+        year = parts[-2]
+        site = "_".join(parts[:-2])
+        csv_path = csv_dir / f"etf_{site}_no_mask_{year}.csv"
+        if csv_path.exists():
+            match = (manifest["site"] == site) & (manifest["year"] == year)
+            if match.any() and manifest.loc[match, "csv_status"].iloc[0] != "written":
+                manifest.loc[match, "csv_status"] = "written"
+
+    manifest.to_csv(manifest_path, index=False)
     print(f"\nWrote {written} CSV files, {skipped} up-to-date ({csv_dir})")
 
 
