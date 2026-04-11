@@ -159,6 +159,9 @@ def extract_all(manifest_path: Path, shapefile: Path = DEFAULT_SHP) -> None:
                 json.dump({site: merged}, f, indent=2)
             if n_new > 0 or not existing:
                 print(f"  {site}/{year}: {len(merged)} dates ({n_new} new)")
+                # Reset csv_status so CSV writer regenerates from updated JSON
+                if "csv_status" in manifest.columns:
+                    manifest.at[idx, "csv_status"] = ""
             manifest.at[idx, "extract_status"] = "etf_extracted"
         else:
             print(f"  {site}/{year}: no valid ETF observations")

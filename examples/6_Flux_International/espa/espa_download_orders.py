@@ -139,6 +139,11 @@ def download_orders(
                         n_downloaded += 1
                         continue
 
+                # Clear stale sentinel — we're redownloading, so prior extraction is invalid
+                stale_sentinel = output_dir / ".extract_done" / f"{tarball_path.stem}.done"
+                if stale_sentinel.exists():
+                    stale_sentinel.unlink()
+
                 # Download checksum first
                 if cksum_url:
                     try:
