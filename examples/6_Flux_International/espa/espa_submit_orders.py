@@ -77,12 +77,16 @@ def submit_orders(
     log_path = manifest_path.parent / "submission_log.json"
     log_entries: list[dict] = []
 
-    # Find submittable rows: have a payload, no order_id yet
-    submittable = manifest[
-        manifest["payload_json"].notna()
-        & (manifest["payload_json"] != "")
-        & (manifest["order_id"].isna() | (manifest["order_id"] == ""))
-    ]
+    # Ensure state columns exist
+    for col in ["retry_count", "last_error"]:
+        if col not in manifest.columns:
+            manifest[col] = ""
+
+    # Find submittable rows: have a payload, no order_id yet (or retryable failures)
+    has_payload = manifest["payload_json"].notna() & (manifest["payload_json"] != "")
+    no_order = manifest["order_id"].isna() | (manifest["order_id"] == "")
+    retryable = manifest["order_status"] == "submit_failed"
+    submittable = manifest[has_payload & (no_order | retryable)]
 
     if submittable.empty:
         print("No submittable rows found.")
@@ -138,7 +142,9 @@ def submit_orders(
         except requests.HTTPError as e:
             msg = str(e)
             manifest.at[idx, "order_status"] = "submit_failed"
-            manifest.at[idx, "notes"] = msg[:200]
+            manifest.at[idx, "last_error"] = msg[:200]
+            prev = int(row.get("retry_count") or 0)
+            manifest.at[idx, "retry_count"] = str(prev + 1)
             log_entries.append(
                 {
                     "site": site,

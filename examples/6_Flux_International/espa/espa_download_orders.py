@@ -167,11 +167,18 @@ def download_orders(
 
                 n_downloaded += 1
 
-            # Extract all tarballs
+            # Extract tarballs not yet extracted (sentinel-based)
+            sentinel_dir = output_dir / ".extract_done"
+            sentinel_dir.mkdir(parents=True, exist_ok=True)
             n_extracted = 0
             for tb in raw_dir.glob("*.tar.gz"):
+                sentinel = sentinel_dir / f"{tb.stem}.done"
+                if sentinel.exists():
+                    n_extracted += 1
+                    continue
                 try:
                     _extract_tarball(tb, extract_dir)
+                    sentinel.touch()
                     n_extracted += 1
                     if not keep_tarballs:
                         tb.unlink()
@@ -189,7 +196,7 @@ def download_orders(
         except requests.HTTPError as e:
             print(f"  ERROR {site}/{year}: {e}")
             manifest.at[idx, "download_status"] = "error"
-            manifest.at[idx, "notes"] = str(e)[:200]
+            manifest.at[idx, "last_error"] = str(e)[:200]
 
     manifest.to_csv(manifest_path, index=False)
     print(f"\nManifest updated: {manifest_path}")

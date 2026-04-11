@@ -46,6 +46,7 @@ def write_csvs(manifest_path: Path) -> None:
     print(f"Processing {len(json_files)} ETF JSON files...")
     written = 0
 
+    skipped = 0
     for jf in json_files:
         # Parse site and year from filename: {site}_{year}_etf.json
         stem = jf.stem  # e.g. US-Ro4_2020_etf
@@ -57,16 +58,21 @@ def write_csvs(manifest_path: Path) -> None:
         year = parts[-2]
         site = "_".join(parts[:-2])
 
+        csv_path = csv_dir / f"etf_{site}_no_mask_{year}.csv"
+
+        # Only rewrite if JSON is newer than existing CSV
+        if csv_path.exists() and csv_path.stat().st_mtime >= jf.stat().st_mtime:
+            skipped += 1
+            continue
+
         with open(jf) as f:
             data = json.load(f)
 
         site_data = data.get(site, {})
         if not site_data:
-            # Try first key in case site name doesn't match exactly
             site_data = next(iter(data.values()), {})
 
         if not site_data:
-            print(f"  SKIP {jf.name}: no data")
             continue
 
         # Build row: sid + ETF columns sorted by date
@@ -79,17 +85,14 @@ def write_csvs(manifest_path: Path) -> None:
 
         etf_cols = sorted(k for k in row if k.startswith("ETF_"))
         if not etf_cols:
-            print(f"  SKIP {site}/{year}: no valid ETF values")
             continue
 
         columns = ["sid"] + etf_cols
         df = pd.DataFrame([row], columns=columns)
-
-        csv_path = csv_dir / f"etf_{site}_no_mask_{year}.csv"
         df.to_csv(csv_path, index=False)
         written += 1
 
-    print(f"\nWrote {written} CSV files to {csv_dir}")
+    print(f"\nWrote {written} CSV files, {skipped} up-to-date ({csv_dir})")
 
 
 def main() -> None:

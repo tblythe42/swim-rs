@@ -120,18 +120,16 @@ def extract_all(manifest_path: Path, shapefile: Path = DEFAULT_SHP) -> None:
     extracts_dir = manifest_path.parent / "extracts" / "etf_json"
     extracts_dir.mkdir(parents=True, exist_ok=True)
 
-    # Only process fully downloaded site-years (download_status == "complete")
+    # Process any fully downloaded site-year, including re-extraction
     downloadable = manifest[manifest["download_status"] == "complete"]
-    already_extracted = downloadable["extract_status"].isin(["etf_extracted", "no_etf"])
-    extractable = downloadable[~already_extracted]
 
-    if extractable.empty:
-        print("No extracted orders to process.")
+    if downloadable.empty:
+        print("No downloaded orders to process.")
         return
 
-    print(f"Extracting ETF from {len(extractable)} site-years...")
+    print(f"Extracting ETF from {len(downloadable)} site-years...")
 
-    for idx, row in extractable.iterrows():
+    for idx, row in downloadable.iterrows():
         site = row["site"]
         year = row["year"]
         extract_dir = Path(row["output_dir"]) / "extract"
@@ -141,21 +139,30 @@ def extract_all(manifest_path: Path, shapefile: Path = DEFAULT_SHP) -> None:
             continue
 
         json_path = extracts_dir / f"{site}_{year}_etf.json"
+
+        # Load existing extractions to merge incrementally
+        existing: dict[str, dict] = {}
         if json_path.exists():
-            print(f"  SKIP {site}/{year}: already extracted")
-            continue
+            with open(json_path) as f:
+                data = json.load(f)
+            existing = data.get(site, {})
 
         site_geom = site_gdf.loc[site].geometry
         values = extract_site_year(site, extract_dir, site_geom)
 
-        if values:
+        # Merge: new values overwrite existing on collision
+        merged = {**existing, **values}
+
+        if merged:
+            n_new = len(merged) - len(existing)
             with open(json_path, "w") as f:
-                json.dump({site: values}, f, indent=2)
-            print(f"  {site}/{year}: {len(values)} dates")
+                json.dump({site: merged}, f, indent=2)
+            if n_new > 0 or not existing:
+                print(f"  {site}/{year}: {len(merged)} dates ({n_new} new)")
+            manifest.at[idx, "extract_status"] = "etf_extracted"
         else:
             print(f"  {site}/{year}: no valid ETF observations")
-
-        manifest.at[idx, "extract_status"] = "etf_extracted" if values else "no_etf"
+            manifest.at[idx, "extract_status"] = "no_etf"
 
     manifest.to_csv(manifest_path, index=False)
     print(f"\nManifest updated: {manifest_path}")

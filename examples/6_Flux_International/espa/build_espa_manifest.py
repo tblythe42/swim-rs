@@ -43,11 +43,16 @@ def _import_from_file(module_name: str, file_path: Path):
 _order_mod = _import_from_file("build_espa_order_csv", _EX6_DIR / "build_espa_order_csv.py")
 _extent_mod = _import_from_file("build_espa_extent", _EX6_DIR / "build_espa_extent.py")
 
-build_espa_order = _order_mod.build_espa_order
 DEFAULT_METADATA = _order_mod.DEFAULT_METADATA
 DEFAULT_NDVI_DIR = _order_mod.DEFAULT_NDVI_DIR
 DEFAULT_PTJPL_DIR = _order_mod.DEFAULT_PTJPL_DIR
 build_espa_extent = _extent_mod.build_espa_extent
+
+# Lower-level functions from the order builder (avoid per-call metadata reload)
+_collect_scene_inventory = _order_mod._collect_scene_inventory
+_filter_scene_inventory = _order_mod._filter_scene_inventory
+_match_scene_inventory = _order_mod._match_scene_inventory
+_load_metadata = _order_mod._load_metadata
 
 DEFAULT_SHP = Path("/data/ssd1/swim/6_Flux_International/data/gis/flux_intl_150m_23MAR2026.shp")
 
@@ -77,11 +82,24 @@ def _get_sites(shapefile: Path) -> list[str]:
     return sorted(gdf["sid"].unique().tolist())
 
 
-def _count_scenes(scene_csv: Path) -> int:
-    if not scene_csv.exists():
-        return 0
-    df = pd.read_csv(scene_csv)
-    return len(df)
+def _empty_row(site: str, year: int, output_dir: Path, extent_csv: Path, note: str) -> dict:
+    return {
+        "site": site,
+        "year": str(year),
+        "start_date": f"{year}-01-01",
+        "end_date": f"{year}-12-31",
+        "chip_size_m": "",
+        "n_scenes": "0",
+        "scene_csv": "",
+        "extent_csv": str(extent_csv) if extent_csv.exists() else "",
+        "payload_json": "",
+        "order_id": "",
+        "order_status": "",
+        "download_status": "",
+        "extract_status": "",
+        "output_dir": str(output_dir / "orders" / site / str(year)),
+        "notes": note,
+    }
 
 
 def build_manifest(
@@ -111,8 +129,35 @@ def build_manifest(
     all_sites = sites or _get_sites(shapefile)
     source_dirs = [DEFAULT_NDVI_DIR, DEFAULT_PTJPL_DIR]
 
+    # Load metadata once (10M rows) instead of per site-year
+    print(f"Loading metadata from {metadata_path}...", flush=True)
+    metadata_df = _load_metadata(metadata_path)
+    print(f"  {len(metadata_df)} product IDs loaded", flush=True)
+
     rows: list[dict] = []
     for site in all_sites:
+        # Build extent once per site
+        extent_csv = extents_dir / f"{site}_extent.csv"
+        if not extent_csv.exists():
+            try:
+                build_espa_extent(
+                    site=site,
+                    output_csv=extent_csv,
+                    shapefile=shapefile,
+                    chip_size_m=chip_size_m,
+                )
+            except (ValueError, FileNotFoundError) as e:
+                print(f"  SKIP extent {site}: {e}", flush=True)
+
+        # Collect all scene keys for this site across all years at once
+        try:
+            full_scene_df = _collect_scene_inventory([site], source_dirs)
+        except ValueError:
+            print(f"  SKIP {site}: no scene keys found", flush=True)
+            for year in range(start_year, end_year + 1):
+                rows.append(_empty_row(site, year, output_dir, extent_csv, "no_scenes"))
+            continue
+
         for year in range(start_year, end_year + 1):
             key = (site, str(year))
             if key in existing_keys:
@@ -123,34 +168,24 @@ def build_manifest(
             start_date = f"{year}-01-01"
             end_date = f"{year}-12-31"
             scene_csv = scenes_dir / f"{site}_{year}_scenes.csv"
-            extent_csv = extents_dir / f"{site}_extent.csv"
 
-            # Build scene list
             n_scenes = 0
             try:
-                build_espa_order(
-                    sites=[site],
-                    metadata_path=metadata_path,
-                    output_csv=scene_csv,
-                    source_dirs=source_dirs,
-                    start_date=start_date,
-                    end_date=end_date,
+                year_scenes = _filter_scene_inventory(
+                    full_scene_df, start_date=start_date, end_date=end_date
                 )
-                n_scenes = _count_scenes(scene_csv)
-            except (ValueError, FileNotFoundError) as e:
-                print(f"  SKIP {site}/{year}: {e}")
-
-            # Build extent (once per site, reuse if exists)
-            if not extent_csv.exists():
-                try:
-                    build_espa_extent(
-                        site=site,
-                        output_csv=extent_csv,
-                        shapefile=shapefile,
-                        chip_size_m=chip_size_m,
+                best, unmatched = _match_scene_inventory(year_scenes, metadata_df)
+                if not best.empty:
+                    product_list = (
+                        best[["product_id"]]
+                        .drop_duplicates()
+                        .rename(columns={"product_id": "landsat_product_identifier_l2"})
                     )
-                except (ValueError, FileNotFoundError) as e:
-                    print(f"  SKIP extent {site}: {e}")
+                    scene_csv.parent.mkdir(parents=True, exist_ok=True)
+                    product_list.to_csv(scene_csv, index=False)
+                    n_scenes = len(product_list)
+            except (ValueError, FileNotFoundError) as e:
+                print(f"  SKIP {site}/{year}: {e}", flush=True)
 
             row_dict = {
                 "site": site,
@@ -170,14 +205,13 @@ def build_manifest(
                 "notes": "" if n_scenes > 0 else "no_scenes",
             }
             rows.append(row_dict)
-            print(f"  {site}/{year}: {n_scenes} scenes")
+            print(f"  {site}/{year}: {n_scenes} scenes", flush=True)
 
     manifest = pd.DataFrame(rows, columns=MANIFEST_COLUMNS)
-    # Drop rows with zero scenes
-    manifest = manifest[manifest["n_scenes"].astype(int) > 0].reset_index(drop=True)
     manifest.to_csv(manifest_path, index=False)
+    active = manifest[manifest["n_scenes"].astype(int) > 0]
     print(f"\nManifest: {manifest_path}")
-    print(f"Total site-years: {len(manifest)}")
+    print(f"Total site-years: {len(manifest)} ({len(active)} with scenes)")
     return manifest_path
 
 
