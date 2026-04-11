@@ -43,16 +43,23 @@ def _load_credentials(cred_file: Path) -> tuple[str, str]:
 
 
 def _get_active_order_count(auth: tuple[str, str]) -> int:
-    """Count orders that are not in a terminal state."""
-    resp = requests.get(
-        f"{ESPA_API}/list-orders",
-        auth=auth,
-        params={"status": ["ordered", "processing", "queued"]},
-        timeout=60,
-    )
+    """Count orders that are not in a terminal state.
+
+    The ESPA list-orders endpoint returns completed orders even when filtering
+    by non-terminal statuses, so we must check each order's actual status.
+    """
+    terminal = {"complete", "cancelled", "purged"}
+    resp = requests.get(f"{ESPA_API}/list-orders", auth=auth, timeout=60)
     resp.raise_for_status()
-    order_list = resp.json()
-    return len(order_list)
+    all_orders = resp.json()
+    active = 0
+    for oid in all_orders:
+        resp2 = requests.get(f"{ESPA_API}/order/{oid}", auth=auth, timeout=60)
+        resp2.raise_for_status()
+        status = resp2.json().get("status", "")
+        if status not in terminal:
+            active += 1
+    return active
 
 
 def _submit_order(auth: tuple[str, str], payload: dict) -> dict:
