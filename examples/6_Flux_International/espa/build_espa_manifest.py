@@ -207,7 +207,15 @@ def build_manifest(
             rows.append(row_dict)
             print(f"  {site}/{year}: {n_scenes} scenes", flush=True)
 
-    manifest = pd.DataFrame(rows, columns=MANIFEST_COLUMNS)
+    new_df = pd.DataFrame(rows, columns=MANIFEST_COLUMNS)
+
+    # When rebuilding a subset of sites, preserve rows for non-selected sites
+    if existing is not None and sites is not None:
+        other_sites = existing[~existing["site"].isin(sites)]
+        manifest = pd.concat([other_sites, new_df], ignore_index=True)
+    else:
+        manifest = new_df
+
     manifest.to_csv(manifest_path, index=False)
     active = manifest[manifest["n_scenes"].astype(int) > 0]
     print(f"\nManifest: {manifest_path}")

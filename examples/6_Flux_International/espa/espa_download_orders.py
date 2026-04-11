@@ -159,9 +159,12 @@ def download_orders(
                     n_failed += 1
                     continue
 
-                # Verify
+                # Verify — move bad tarballs out of raw/ so extraction won't touch them
                 if cksum_path.exists() and not _verify_checksum(tarball_path, cksum_path):
-                    print(f"    CHECKSUM FAILED {name}")
+                    bad_dir = output_dir / "bad"
+                    bad_dir.mkdir(parents=True, exist_ok=True)
+                    tarball_path.rename(bad_dir / tarball_path.name)
+                    print(f"    CHECKSUM FAILED {name} (quarantined)")
                     n_failed += 1
                     continue
 
