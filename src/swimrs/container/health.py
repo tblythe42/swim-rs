@@ -136,8 +136,14 @@ class HealthPolicy:
         # Dynamic rules for etf_target_model
         etf_model = config.get("etf_target_model")
         if etf_model and health_profile != cls.PROFILE_FORWARD_RUN:
-            mask = "irr" if mask_mode == "irrigation" else "inv_irr"
-            path = f"remote_sensing/etf/landsat/{etf_model}/{mask}"
+            instrument = config.get("etf_target_instrument", "landsat")
+            if mask_mode == "irrigation":
+                mask = "irr"
+            elif mask_mode in ("no_mask", "none"):
+                mask = "no_mask"
+            else:
+                mask = "inv_irr"
+            path = f"remote_sensing/etf/{instrument}/{etf_model}/{mask}"
             rules.append(
                 PolicyRule(
                     "etf_target_model",
@@ -155,15 +161,15 @@ class HealthPolicy:
                     PolicyRule(
                         "etf_target_model",
                         etf_model,
-                        f"remote_sensing/etf/landsat/{etf_model}",
+                        f"remote_sensing/etf/{instrument}/{etf_model}",
                         "field_coverage_union",
                         0,
                         "FAIL",
                         f"Every field must have ETf ({etf_model}) obs in irr or inv_irr",
                     )
                 )
-            elif mask_mode == "no_mask":
-                no_mask_path = f"remote_sensing/etf/landsat/{etf_model}/no_mask"
+            elif mask_mode in ("no_mask", "none"):
+                no_mask_path = f"remote_sensing/etf/{instrument}/{etf_model}/no_mask"
                 rules.append(
                     PolicyRule(
                         "etf_target_model",

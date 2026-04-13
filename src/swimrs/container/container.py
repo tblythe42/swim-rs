@@ -718,6 +718,7 @@ class SwimContainer:
             for attr in (
                 "mask_mode",
                 "etf_target_model",
+                "etf_target_instrument",
                 "etf_ensemble_members",
                 "met_source",
                 "snow_source",
