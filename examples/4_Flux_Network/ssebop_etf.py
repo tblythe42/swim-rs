@@ -186,7 +186,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sites", type=str, default=None, help="Comma-separated site IDs")
     parser.add_argument("--start-yr", type=int, default=2000)
-    parser.add_argument("--end-yr", type=int, default=2024)
+    parser.add_argument("--end-yr", type=int, default=2025)
     parser.add_argument("--feature-id", type=str, default="FID")
     parser.add_argument("--state-col", type=str, default="state")
     parser.add_argument("--bucket", type=str, default=None)

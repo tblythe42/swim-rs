@@ -1,6 +1,6 @@
 # 4_Flux_Network: SWIM with USGS SSEBop NHM
 
-Field-scale SWIM runs across ~245 CONUS flux stations (all land cover types), using SSEBop NHM as the sole ETf calibration target. Date range: 1987-2024.
+Field-scale SWIM runs across ~245 CONUS flux stations (all land cover types), using SSEBop NHM as the sole ETf calibration target. Default project date range: 1987-2025. Specific experiments may intentionally use shorter windows.
 
 ## Data sources
 

@@ -1,24 +1,94 @@
-"""Extract SSEBop ETf using openet-ssebop v0.2.6 via batch EE export tasks.
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "openet-ssebop==0.2.6",
+#   "earthengine-api",
+#   "geopandas",
+#   "fiona",
+#   "tqdm",
+# ]
+# ///
+"""Extract SSEBop ETf using openet-ssebop v0.2.6 (Tcorr FANO, same as NHM asset).
 
-Computes v0.2.6 ETf on-the-fly from Landsat C02 SR (Tcorr FANO, same as
-NHM asset) and exports per-site-year CSVs to a GCS bucket, matching the
-NHM extract format.
+Uses per-scene reduceRegion + getInfo() to avoid projection errors that occur
+when clipping or stacking v0.2.6 ETf images (mixed UTM/5km/1km CRS inputs).
 
-Requires the isolated venv at /tmp/ssebop026_venv with openet-ssebop==0.2.6.
+Writes one CSV per site-year to local disk, matching the NHM extract format:
+  header: site_id, scene1, scene2, ...
+  row:    US-ARM, 0.42, 0.87, ...
 
-Usage:
-    /tmp/ssebop026_venv/bin/python ssebop_v026_etf.py --start-yr 2024 --end-yr 2025
-    /tmp/ssebop026_venv/bin/python ssebop_v026_etf.py --sites US-ARM,US-Ne1 --start-yr 2024 --end-yr 2025
+By default, discovers site+year combos from existing NHM CSVs in ssebop_etf/no_mask/.
+Use --sites and --start-yr/--end-yr to override.
+
+Run with:
+    uv run examples/4_Flux_Network/ssebop_v026_etf.py
+    uv run examples/4_Flux_Network/ssebop_v026_etf.py --sites US-ARM,US-Ne1 --start-yr 2010 --end-yr 2012
+
+Two patches are applied at startup to the installed openet-ssebop==0.2.6 files
+(idempotent — safe to run multiple times):
+  1. image.py: select band 0 for projection() to avoid mixed-CRS crash
+  2. model.py: remove .clamp(0, 1.0) so ETf > 1.0 is preserved (matches NHM)
+See notes/DIY_SSEBOP.md for details.
 """
 
+import csv
+import importlib.util
 import os
 import re
-import time
 from pathlib import Path
 
-import ee
-import geopandas as gpd
-import openet.ssebop as ssebop
+
+def _apply_patches():
+    """Patch openet-ssebop==0.2.6 in-place (idempotent).
+
+    Must be called before `import openet.ssebop`.
+    """
+    spec = importlib.util.find_spec("openet.ssebop")
+    if spec is None:
+        raise ImportError("openet-ssebop not found — run via: uv run ssebop_v026_etf.py")
+    pkg_dir = os.path.dirname(spec.origin)
+
+    # Patch 1: image.py — select band 0 for projection() call.
+    # v0.2.6 calls .projection() on a multi-band image with mixed CRS, which
+    # crashes. Selecting band 0 gives a consistent single-band projection.
+    image_py = os.path.join(pkg_dir, "image.py")
+    with open(image_py) as f:
+        src = f.read()
+    if "image.projection().crs()" in src:
+        src = src.replace(
+            "image.projection().crs()",
+            "image.select([0]).projection().crs()",
+        )
+        src = src.replace(
+            "ee.Algorithms.Describe(image.projection())",
+            "ee.Algorithms.Describe(image.select([0]).projection())",
+        )
+        with open(image_py, "w") as f:
+            f.write(src)
+        print("[patch] image.py: projection fix applied")
+
+    # Patch 2: model.py — remove .clamp(0, 1.0) so ETf > 1.0 is preserved.
+    # The NHM asset has no upper clamp (12.6% of values exceed 1.0, max ~1.5).
+    # Removing the clamp makes the FOSS output match NHM behaviour.
+    model_py = os.path.join(pkg_dir, "model.py")
+    with open(model_py) as f:
+        src = f.read()
+    if ".clamp(0, 1.0).rename(['et_fraction'])" in src:
+        src = src.replace(
+            ".clamp(0, 1.0).rename(['et_fraction'])",
+            ".max(0).rename(['et_fraction'])",
+        )
+        with open(model_py, "w") as f:
+            f.write(src)
+        print("[patch] model.py: clamp removed")
+
+
+_apply_patches()
+
+import ee  # noqa: E402
+import geopandas as gpd  # noqa: E402
+import openet.ssebop as ssebop  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 LANDSAT_COLLECTIONS = [
     "LANDSAT/LT05/C02/T1_L2",
@@ -27,16 +97,35 @@ LANDSAT_COLLECTIONS = [
     "LANDSAT/LC09/C02/T1_L2",
 ]
 
-BUCKET = "wudr"
-FEATURE_ID = "site_id"
-
 
 def parse_scene_name(scene_id):
-    """Convert full scene ID to compact lowercase name: {sensor}_{pathrow}_{date}."""
+    """Convert full scene ID to compact name: {sensor}_{pathrow}_{date}."""
     parts = scene_id.split("/")[-1].split("_")
     if len(parts) >= 3:
-        return f"{parts[0]}_{parts[1]}_{parts[2]}".lower()
-    return scene_id.split("/")[-1].lower()
+        return f"{parts[0]}_{parts[1]}_{parts[2]}"
+    return scene_id.split("/")[-1]
+
+
+def extract_etf(scene_id, polygon):
+    """Compute v0.2.6 ETf for a single scene and return mean over polygon.
+
+    Returns (scene_name, etf_value) or (scene_name, None) on error.
+    """
+    name = parse_scene_name(scene_id)
+    try:
+        img = ssebop.Image.from_landsat_c2_sr(scene_id, et_fraction_type="grass")
+        etf = img.et_fraction
+        result = etf.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=polygon,
+            scale=30,
+            maxPixels=1e9,
+        ).getInfo()
+        val = result.get("et_fraction")
+        return name, val
+    except Exception as e:
+        print(f"    {name}: error — {e}")
+        return name, None
 
 
 def discover_site_years(nhm_dir):
@@ -50,43 +139,15 @@ def discover_site_years(nhm_dir):
     return pairs
 
 
-def export_table(data, desc, selectors, bucket, fn_prefix):
-    """Export a FeatureCollection to GCS as CSV."""
-    task = ee.batch.Export.table.toCloudStorage(
-        data,
-        description=desc,
-        bucket=bucket,
-        fileNamePrefix=fn_prefix,
-        fileFormat="CSV",
-        selectors=selectors,
-    )
-    try:
-        task.start()
-        print(desc, flush=True)
-        return True
-    except ee.ee_exception.EEException as e:
-        msg = str(e)
-        if "many tasks already in the queue" in msg:
-            print(f"Task queue full. Waiting 10 minutes to retry {desc}...")
-            time.sleep(600)
-            task.start()
-            print(desc, flush=True)
-            return True
-        raise
-
-
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="SSEBop v0.2.6 ETf batch export")
+    parser = argparse.ArgumentParser(description="SSEBop v0.2.6 ETf extract")
     parser.add_argument(
-        "--sites",
-        type=str,
-        default=None,
-        help="Comma-separated site IDs (default: all)",
+        "--sites", type=str, default=None, help="Comma-separated site IDs (default: all NHM sites)"
     )
-    parser.add_argument("--start-yr", type=int, default=2024)
-    parser.add_argument("--end-yr", type=int, default=2025)
+    parser.add_argument("--start-yr", type=int, default=None)
+    parser.add_argument("--end-yr", type=int, default=None)
     args = parser.parse_args()
 
     ee.Initialize()
@@ -100,18 +161,6 @@ def main():
     shapefile = os.path.join(data_root, "gis", "flux_fields.shp")
     gdf = gpd.read_file(shapefile, engine="fiona").to_crs(epsg=4326)
 
-    # Local check directory — skip if CSV already synced from bucket
-    check_dir = os.path.join(
-        data_root,
-        "remote_sensing",
-        "landsat",
-        "extracts",
-        "ssebop_v026_etf",
-        "no_mask",
-    )
-    os.makedirs(check_dir, exist_ok=True)
-
-    # Build site list
     nhm_dir = os.path.join(
         data_root,
         "remote_sensing",
@@ -120,93 +169,105 @@ def main():
         "ssebop_etf",
         "no_mask",
     )
-    all_nhm_pairs = discover_site_years(nhm_dir)
-    nhm_sites = sorted({s for s, _ in all_nhm_pairs})
-
-    if args.sites:
-        sites = [s.strip() for s in args.sites.split(",")]
-    else:
-        sites = nhm_sites if nhm_sites else sorted(gdf[FEATURE_ID].unique())
-
-    print(f"SSEBop v0.2.6 ETf: {len(sites)} sites, {args.start_yr}-{args.end_yr}")
-    print(f"Bucket: gs://{BUCKET}")
-
-    exported, skipped = 0, 0
-
-    for fid in sites:
-        row = gdf[gdf[FEATURE_ID] == fid]
-        if row.empty:
-            continue
-        geom = row.iloc[0].geometry
-        if geom.geom_type not in ("Polygon", "MultiPolygon"):
-            continue
-        polygon = ee.Geometry(geom.__geo_interface__)
-
-        for year in range(args.start_yr, args.end_yr + 1):
-            desc = f"ssebop_etf_{fid}_no_mask_{year}"
-
-            # Skip if already exported locally
-            if os.path.exists(os.path.join(check_dir, f"{desc}.csv")):
-                skipped += 1
-                continue
-
-            # Discover scenes
-            coll = ssebop.Collection(
-                LANDSAT_COLLECTIONS,
-                start_date=f"{year}-01-01",
-                end_date=f"{year}-12-31",
-                geometry=polygon,
-                cloud_cover_max=70,
-            )
-            scenes = coll.get_image_ids()
-            scenes = sorted(set(scenes), key=lambda s: s.split("_")[-1])
-
-            if not scenes:
-                continue
-
-            # Stack all scene ETf bands into one image
-            selectors = [FEATURE_ID]
-            bands = None
-
-            for scene_id in scenes:
-                name = parse_scene_name(scene_id)
-                selectors.append(name)
-
-                try:
-                    img = ssebop.Image.from_landsat_c2_sr(
-                        scene_id,
-                    )
-                    etf_img = img.et_fraction.rename(name).clip(polygon)
-                except Exception as e:
-                    print(f"  {fid} {year} {name}: skip ({e})")
-                    continue
-
-                if bands is None:
-                    bands = etf_img
-                else:
-                    bands = bands.addBands([etf_img])
-
-            if bands is None:
-                continue
-
-            fc = ee.FeatureCollection(ee.Feature(polygon, {FEATURE_ID: fid}))
-            data = bands.reduceRegions(
-                collection=fc,
-                reducer=ee.Reducer.mean(),
-                scale=30,
-            )
-
-            fn_prefix = (
-                f"4_Flux_Network/remote_sensing/landsat/extracts/ssebop_v026_etf/no_mask/{desc}"
-            )
-            export_table(data, desc, selectors, BUCKET, fn_prefix)
-            exported += 1
-
-    print(f"\nExported {exported}, skipped {skipped} existing")
-    print(
-        "Sync with: gsutil -m rsync gs://wudr/4_Flux_Network/remote_sensing/"
-        "landsat/extracts/ssebop_v026_etf/no_mask/ " + check_dir
+    out_dir = os.path.join(
+        data_root,
+        "remote_sensing",
+        "landsat",
+        "extracts",
+        "ssebop_v026_etf",
+        "no_mask",
     )
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Build work list — use NHM CSVs for discovery, but when an explicit
+    # year range extends beyond the NHM asset (e.g. 2024-2025), generate
+    # site-year pairs directly from the shapefile.
+    all_pairs = discover_site_years(nhm_dir)
+    if args.sites:
+        keep_sites = {s.strip() for s in args.sites.split(",")}
+    else:
+        keep_sites = None
+
+    if args.start_yr and args.end_yr:
+        nhm_sites = sorted({s for s, _ in all_pairs})
+        sites_list = sorted(keep_sites) if keep_sites else nhm_sites
+        if not sites_list:
+            sites_list = sorted(gdf["site_id"].unique())
+        all_pairs = [(s, y) for s in sites_list for y in range(args.start_yr, args.end_yr + 1)]
+    else:
+        if keep_sites:
+            all_pairs = [(s, y) for s, y in all_pairs if s in keep_sites]
+        if args.start_yr:
+            all_pairs = [(s, y) for s, y in all_pairs if y >= args.start_yr]
+        if args.end_yr:
+            all_pairs = [(s, y) for s, y in all_pairs if y <= args.end_yr]
+
+    # Skip already-completed
+    todo = []
+    for site, year in all_pairs:
+        out_csv = os.path.join(out_dir, f"ssebop_etf_{site}_no_mask_{year}.csv")
+        if not os.path.exists(out_csv):
+            todo.append((site, year))
+
+    print(
+        f"SSEBop v0.2.6 ETf: {len(todo)} site-years to process "
+        f"({len(all_pairs) - len(todo)} already done)"
+    )
+    print(f"Output: {out_dir}")
+
+    geom_cache = {}
+
+    for i, (site, year) in enumerate(todo):
+        if site not in geom_cache:
+            row = gdf[gdf["site_id"] == site]
+            if row.empty:
+                print(f"  {site}: not in shapefile, skipping")
+                geom_cache[site] = None
+                continue
+            geom = row.iloc[0].geometry
+            if geom.geom_type not in ("Polygon", "MultiPolygon"):
+                geom_cache[site] = None
+                continue
+            geom_cache[site] = ee.Geometry(geom.__geo_interface__)
+
+        polygon = geom_cache[site]
+        if polygon is None:
+            continue
+
+        out_csv = os.path.join(out_dir, f"ssebop_etf_{site}_no_mask_{year}.csv")
+
+        coll = ssebop.Collection(
+            LANDSAT_COLLECTIONS,
+            start_date=f"{year}-01-01",
+            end_date=f"{year}-12-31",
+            geometry=polygon,
+            cloud_cover_max=70,
+        )
+        scenes = coll.get_image_ids()
+        scenes = sorted(set(scenes), key=lambda s: s.split("_")[-1])
+
+        if not scenes:
+            print(f"  [{i + 1}/{len(todo)}] {site} {year}: no scenes")
+            continue
+
+        print(f"  [{i + 1}/{len(todo)}] {site} {year}: {len(scenes)} scenes")
+
+        names = []
+        values = []
+        for scene_id in tqdm(scenes, desc=f"  {site} {year}", leave=False):
+            name, val = extract_etf(scene_id, polygon)
+            names.append(name)
+            values.append(val if val is not None else "")
+
+        with open(out_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["site_id"] + names)
+            writer.writerow([site] + values)
+
+        n_valid = sum(1 for v in values if v != "")
+        print(f"    wrote {os.path.basename(out_csv)} ({n_valid}/{len(names)} valid)")
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":

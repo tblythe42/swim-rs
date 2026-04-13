@@ -76,6 +76,11 @@ def build_ablation_container(
     add_sentinel = family_spec["add_sentinel"]
     instruments = tuple(family_spec["merged_ndvi_instruments"])
 
+    # Force single-threaded ingest — ProcessPoolExecutor hangs when called
+    # from the ablation orchestrator's nested import path.
+    saved_workers = cfg.workers
+    cfg.workers = 1
+
     ingest_meteorology(container, cfg, overwrite=overwrite)
     ingest_remote_sensing(
         container,
@@ -84,6 +89,8 @@ def build_ablation_container(
         overwrite=overwrite,
         add_sentinel=add_sentinel,
     )
+
+    cfg.workers = saved_workers
     ingest_snow(container, cfg, overwrite=overwrite)
     ingest_properties(container, cfg, overwrite=overwrite)
 
