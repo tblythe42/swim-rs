@@ -145,7 +145,8 @@ def submit_orders(
             msg = str(e)
             manifest.at[idx, "order_status"] = "submit_failed"
             manifest.at[idx, "last_error"] = msg[:200]
-            prev = int(row.get("retry_count") or 0)
+            rc = row.get("retry_count")
+            prev = 0 if pd.isna(rc) or rc == "" else int(rc)
             manifest.at[idx, "retry_count"] = str(prev + 1)
             log_entries.append(
                 {

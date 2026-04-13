@@ -152,13 +152,17 @@ def extract_all(manifest_path: Path, shapefile: Path = DEFAULT_SHP) -> None:
 
         # Merge: new values overwrite existing on collision
         merged = {**existing, **values}
+        changed = merged != existing
 
         if merged:
-            n_new = len(merged) - len(existing)
-            with open(json_path, "w") as f:
-                json.dump({site: merged}, f, indent=2)
-            if n_new > 0 or not existing:
-                print(f"  {site}/{year}: {len(merged)} dates ({n_new} new)")
+            n_new = len(set(merged) - set(existing))
+            if changed or not json_path.exists():
+                with open(json_path, "w") as f:
+                    json.dump({site: merged}, f, indent=2)
+                if n_new > 0 or not existing:
+                    print(f"  {site}/{year}: {len(merged)} dates ({n_new} new)")
+                else:
+                    print(f"  {site}/{year}: updated {len(merged)} dates (value corrections only)")
                 # Reset csv_status so CSV writer regenerates from updated JSON
                 if "csv_status" in manifest.columns:
                     manifest.at[idx, "csv_status"] = ""

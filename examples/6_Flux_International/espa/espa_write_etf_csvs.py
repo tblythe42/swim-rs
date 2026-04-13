@@ -7,11 +7,19 @@
 """Convert extracted per-scene ETF observations into ingest-ready annual CSVs.
 
 Reads the per-site-year ETF JSON files and writes annual CSVs matching the
-format expected by the container ingestor.
+format expected by the container ingestor.  Output goes into the Landsat
+extracts tree so ``container_prep.py`` finds it when
+``etf_target_model = "ssebop"``.
 
 Output format:
     sid,ETF_YYYYMMDD,ETF_YYYYMMDD,...
     US-Ro4,0.85,0.92,...
+
+Filename convention:
+    ssebop_etf_{site}_no_mask_{year}.csv
+
+Default output directory:
+    {landsat_dir}/extracts/ssebop_etf/no_mask/
 
 Example:
     uv run examples/6_Flux_International/espa/espa_write_etf_csvs.py \
@@ -26,18 +34,22 @@ from pathlib import Path
 
 import pandas as pd
 
+DEFAULT_CSV_DIR = Path(
+    "/data/ssd1/swim/6_Flux_International/data/remote_sensing/landsat/extracts/ssebop_etf/no_mask"
+)
+
 
 def _date_key_to_column(date_key: str) -> str:
     """Convert '2020-07-15' to 'ETF_20200715'."""
     return "ETF_" + date_key.replace("-", "")
 
 
-def write_csvs(manifest_path: Path) -> None:
+def write_csvs(manifest_path: Path, output_dir: Path | None = None) -> None:
     manifest = pd.read_csv(manifest_path, dtype=str)
     if "csv_status" not in manifest.columns:
         manifest["csv_status"] = ""
     json_dir = manifest_path.parent / "extracts" / "etf_json"
-    csv_dir = manifest_path.parent / "extracts" / "etf" / "no_mask"
+    csv_dir = output_dir or DEFAULT_CSV_DIR
     csv_dir.mkdir(parents=True, exist_ok=True)
 
     json_files = sorted(json_dir.glob("*_etf.json")) if json_dir.exists() else []
@@ -60,7 +72,7 @@ def write_csvs(manifest_path: Path) -> None:
         year = parts[-2]
         site = "_".join(parts[:-2])
 
-        csv_path = csv_dir / f"etf_{site}_no_mask_{year}.csv"
+        csv_path = csv_dir / f"ssebop_etf_{site}_no_mask_{year}.csv"
 
         # Only rewrite if JSON is newer than existing CSV
         if csv_path.exists() and csv_path.stat().st_mtime >= jf.stat().st_mtime:
@@ -107,7 +119,7 @@ def write_csvs(manifest_path: Path) -> None:
             continue
         year = parts[-2]
         site = "_".join(parts[:-2])
-        csv_path = csv_dir / f"etf_{site}_no_mask_{year}.csv"
+        csv_path = csv_dir / f"ssebop_etf_{site}_no_mask_{year}.csv"
         if csv_path.exists():
             match = (manifest["site"] == site) & (manifest["year"] == year)
             if match.any() and manifest.loc[match, "csv_status"].iloc[0] != "written":
@@ -120,8 +132,16 @@ def write_csvs(manifest_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Write ingest-ready ETF CSVs")
     parser.add_argument("--manifest", required=True, help="Path to espa_manifest.csv")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=f"Output directory for CSVs (default: {DEFAULT_CSV_DIR})",
+    )
     args = parser.parse_args()
-    write_csvs(Path(args.manifest))
+    write_csvs(
+        Path(args.manifest),
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+    )
 
 
 if __name__ == "__main__":
