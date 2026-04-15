@@ -38,10 +38,12 @@ def get_cropland_sites(min_eto=MIN_ETO):
     from swimrs.container.schema import is_cropland
 
     df = pd.read_csv(LULC_CSV)
-    # Prefer GLC10, fall back to MODIS
-    mask = df["glc10_lc"].fillna(-1).astype(int).apply(lambda c: is_cropland(c, "glc10"))
-    if not mask.any():
-        mask = df["modis_lc"].fillna(-1).astype(int).apply(lambda c: is_cropland(c, "modis"))
+    # Per-site fallback: prefer GLC10, fall back to MODIS for each row
+    glc = df["glc10_lc"].fillna(-1).astype(int)
+    modis = df["modis_lc"].fillna(-1).astype(int)
+    mask = glc.apply(lambda c: is_cropland(c, "glc10")) | (
+        (glc <= 0) & modis.apply(lambda c: is_cropland(c, "modis"))
+    )
     return sorted(df.loc[mask, "sid"].astype(str).tolist())
 
 
