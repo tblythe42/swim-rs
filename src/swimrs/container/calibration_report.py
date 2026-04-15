@@ -347,7 +347,9 @@ def build_calibration_report(
     lulc_codes = None
     if "properties/irrigation/irr" in root:
         irr_fractions = np.asarray(root["properties/irrigation/irr"][:], dtype="float64")
-    if "properties/land_cover/modis_lc" in root:
+    if "properties/land_cover/glc10" in root:
+        lulc_codes = np.asarray(root["properties/land_cover/glc10"][:])
+    elif "properties/land_cover/modis_lc" in root:
         lulc_codes = np.asarray(root["properties/land_cover/modis_lc"][:])
 
     return CalibrationReport(

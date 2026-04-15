@@ -97,13 +97,24 @@ def main():
     container = SwimContainer.open(str(cfg.container_path), mode="r")
 
     gdf = gpd.read_file(cfg.fields_shapefile, engine="fiona")
-    lulc_map = dict(zip(gdf["sid"], gdf["modis_lc"]))
 
-    # Select cropland sites (MODIS 12, 14), exclude bad met/soils
+    # Select cropland sites: prefer GLC10 (10=crop), fall back to MODIS (12,14)
+    from swimrs.container.schema import is_cropland
+
+    def _is_crop(row):
+        glc = row.get("glc10_lc")
+        if pd.notna(glc) and int(glc) > 0:
+            return is_cropland(int(glc), "glc10")
+        modis = row.get("modis_lc")
+        if pd.notna(modis) and int(modis) > 0:
+            return is_cropland(int(modis), "modis")
+        return False
+
     crop_uids = [
         uid
         for uid in container.field_uids
-        if int(lulc_map.get(uid, 0)) in (12, 14) and uid not in SKIP_FIDS
+        if _is_crop(gdf.set_index("sid").loc[uid]) and uid not in SKIP_FIDS
+        if uid in gdf["sid"].values
     ]
     print(f"Cropland sites: {len(crop_uids)}")
 

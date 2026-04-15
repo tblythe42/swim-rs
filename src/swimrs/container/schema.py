@@ -249,6 +249,75 @@ ACCEPT_NAN_PARAMS: list[str] = REQUIRED_MET_IRR + REQUIRED_MET_UNIRR + ["swe"]
 COLUMN_MULTIINDEX: list[str] = ["site", "instrument", "parameter", "units", "algorithm", "mask"]
 
 
+# ---------------------------------------------------------------------------
+# GLC10 (FROM-GLC10, 10m) — primary classification
+# ---------------------------------------------------------------------------
+GLC10_CROPLAND = {10}
+GLC10_NAMES = {
+    10: "Cropland",
+    20: "Forest",
+    30: "Grassland",
+    40: "Shrubland",
+    50: "Wetland",
+    60: "Water",
+    70: "Tundra",
+    80: "Impervious",
+    90: "Barren",
+    100: "Snow/Ice",
+}
+
+# ---------------------------------------------------------------------------
+# MODIS IGBP (500m) — fallback only when GLC10 unavailable
+# ---------------------------------------------------------------------------
+MODIS_CROPLAND = {12, 13, 14}
+
+# ---------------------------------------------------------------------------
+# Rooting depth mapping: GLC10 → MODIS-equivalent for ROOTING_DEPTH_BY_LULC
+# Only used for rooting depth lookup. NOT for cropland/perennial semantics.
+# Unknown/unsupported classes → Grassland (10), not Cropland.
+# ---------------------------------------------------------------------------
+GLC10_TO_MODIS_ROOTING = {
+    10: 12,  # Cropland → Croplands
+    20: 4,  # Forest → Deciduous Broadleaf (conservative)
+    30: 10,  # Grassland → Grasslands
+    40: 7,  # Shrubland → Open Shrublands
+    50: 11,  # Wetland → Wetlands
+    60: 10,  # Water → Grasslands (conservative)
+    70: 10,  # Tundra → Grasslands
+    80: 13,  # Impervious → Developed
+    90: 16,  # Barren → Desert
+    100: 10,  # Snow/Ice → Grasslands (conservative)
+}
+
+# Default for unknown LULC: Grasslands, NOT cropland.
+UNKNOWN_ROOTING_DEFAULT = 10
+
+
+def is_cropland(code: int, source: str = "glc10") -> bool:
+    """Check if a LULC code indicates cropland.
+
+    Args:
+        code: Land cover class code
+        source: "glc10" or "modis"
+    """
+    if source == "glc10":
+        return code in GLC10_CROPLAND
+    return code in MODIS_CROPLAND
+
+
+def get_rooting_code(code: int, source: str = "glc10") -> int:
+    """Map a LULC code to its MODIS-equivalent for ROOTING_DEPTH_BY_LULC lookup.
+
+    This is a physical approximation for root zone depth. It does NOT determine
+    cropland status or perennial behavior — use is_cropland() for that.
+    """
+    if source == "glc10":
+        return GLC10_TO_MODIS_ROOTING.get(code, UNKNOWN_ROOTING_DEFAULT)
+    if code not in ROOTING_DEPTH_BY_LULC:
+        return UNKNOWN_ROOTING_DEFAULT
+    return code
+
+
 def get_rooting_depth(lulc_code: int, use_max: bool = True) -> float:
     """
     Get rooting depth for a given LULC code.
@@ -266,8 +335,7 @@ def get_rooting_depth(lulc_code: int, use_max: bool = True) -> float:
         Depth: 1.12m
     """
     if lulc_code not in ROOTING_DEPTH_BY_LULC:
-        # Default to cropland if unknown
-        lulc_code = 12
+        lulc_code = UNKNOWN_ROOTING_DEFAULT
 
     spec = ROOTING_DEPTH_BY_LULC[lulc_code]
     return spec.max_depth if use_max else spec.mean_depth
@@ -430,7 +498,7 @@ class SwimSchema:
 
     PROPERTIES_STRUCTURE = {
         "soils": ["awc", "clay", "sand", "ksat", "rock_ite", "rew", "source"],
-        "land_cover": ["modis_lc", "cdl", "glc10", "lulc_code"],
+        "land_cover": ["glc10", "modis_lc", "cdl"],
         "vegetation": ["rooting_depth"],
         "irrigation": ["lanid", "irrmapper", "irr"],
         "location": ["lat", "lon", "elevation", "state", "area_m2"],

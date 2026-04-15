@@ -1760,25 +1760,37 @@ class Ingestor(Component):
         irrigation_csv: str | Path | None,
         overwrite: bool,
     ) -> None:
-        """Ingest LULC data with override logic."""
-        path = "properties/land_cover/modis_lc"
+        """Ingest LULC data with override logic.
 
-        if path in self._state.root and not overwrite:
+        Stores GLC10 independently (if available) and MODIS as fallback.
+        GLC10 is the primary classification; MODIS is kept for backward
+        compatibility with older containers.
+        """
+        modis_path = "properties/land_cover/modis_lc"
+        glc10_path = "properties/land_cover/glc10"
+
+        if modis_path in self._state.root and not overwrite:
             return
-        if path in self._state.root:
-            self._safe_delete_path(path)
+        if modis_path in self._state.root:
+            self._safe_delete_path(modis_path)
+        if glc10_path in self._state.root:
+            self._safe_delete_path(glc10_path)
 
         df = pd.read_csv(lulc_csv)
         df = df.set_index(uid_column)
         df.index = df.index.astype(str)
 
-        # Apply GLCLand10 crop override
-        # If extra LULC column has value 10 (crop) and MODIS is not 12, override to 12
+        # Store GLC10 independently (no mutation)
         if extra_lulc_column and extra_lulc_column in df.columns:
-            crop_override = (df[extra_lulc_column] == 10) & (df[lulc_column] != 12)
-            df.loc[crop_override, lulc_column] = 12
+            glc10_arr = self._state.create_property_array(glc10_path, dtype="int16", fill_value=-1)
+            for uid in self._state.field_uids:
+                if uid in df.index:
+                    val = df.loc[uid, extra_lulc_column]
+                    if not pd.isna(val):
+                        idx = self._state.get_field_index(uid)
+                        glc10_arr[idx] = int(val)
 
-        # Apply irrigation-based crop override
+        # Apply irrigation-based crop override on MODIS only
         # If mean irrigation > 0.3 and MODIS is not 12, override to 12
         if irrigation_csv:
             irr_df = pd.read_csv(Path(irrigation_csv))
@@ -1792,8 +1804,8 @@ class Ingestor(Component):
                 irr_crop_override = (mean_irr > 0.3) & (df[lulc_column] != 12)
                 df.loc[irr_crop_override, lulc_column] = 12
 
-        # Write to container (use -1 as fill_value for integer types)
-        arr = self._state.create_property_array(path, dtype="int16", fill_value=-1)
+        # Write MODIS to container (use -1 as fill_value for integer types)
+        arr = self._state.create_property_array(modis_path, dtype="int16", fill_value=-1)
 
         for uid in self._state.field_uids:
             if uid in df.index:

@@ -41,6 +41,26 @@ SKIP_FIDS = {
 }
 
 
+def _glc10_lulc_map(gdf):
+    """Build sid -> LULC code map, preferring GLC10 with MODIS fallback.
+
+    GLC10 codes are mapped to MODIS equivalents for display consistency
+    with existing LULC_NAMES dicts.
+    """
+    from swimrs.container.schema import GLC10_TO_MODIS_ROOTING
+
+    result = {}
+    for _, row in gdf.iterrows():
+        sid = row["sid"]
+        glc = row.get("glc10_lc")
+        if pd.notna(glc) and int(glc) > 0:
+            result[sid] = GLC10_TO_MODIS_ROOTING.get(int(glc), int(glc))
+        else:
+            modis = row.get("modis_lc")
+            result[sid] = int(modis) if pd.notna(modis) else 0
+    return result
+
+
 def _load_config():
     project_dir = Path(__file__).resolve().parent
     conf = project_dir / "6_Flux_International_lulc_defaults.toml"
@@ -129,7 +149,7 @@ def main():
     print("\n=== Evaluating against flux tower ET ===")
 
     gdf = gpd.read_file(cfg.fields_shapefile, engine="fiona")
-    lulc_map = dict(zip(gdf["sid"], gdf["modis_lc"]))
+    lulc_map = _glc10_lulc_map(gdf)
     LULC_NAMES = {
         1: "ENF",
         2: "EBF",

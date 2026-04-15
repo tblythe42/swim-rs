@@ -65,11 +65,20 @@ class HealthPolicy:
         PolicyRule(
             "*",
             "*",
+            "properties/land_cover/glc10",
+            "not_all_fill",
+            -1,
+            "WARN",
+            "GLC10 land cover missing; falling back to MODIS",
+        ),
+        PolicyRule(
+            "*",
+            "*",
             "properties/land_cover/modis_lc",
             "not_all_fill",
             -1,
-            "FAIL",
-            "Land cover required for rooting depth",
+            "WARN",
+            "MODIS land cover missing; GLC10 required",
         ),
     ]
 
@@ -399,6 +408,7 @@ class ContainerHealthCheck:
         "properties/soils/clay": {"fill": float("nan"), "dtype": "float"},
         "properties/soils/sand": {"fill": float("nan"), "dtype": "float"},
         "properties/soils/ksat": {"fill": float("nan"), "dtype": "float"},
+        "properties/land_cover/glc10": {"fill": -1, "dtype": "int"},
         "properties/land_cover/modis_lc": {"fill": -1, "dtype": "int"},
         "properties/irrigation/irr": {"fill": float("nan"), "dtype": "float"},
         "properties/location/lat": {"fill": float("nan"), "dtype": "float"},
@@ -419,6 +429,24 @@ class ContainerHealthCheck:
         self._check_time_series()
         self._check_dynamics()
         self._check_policy()
+
+        # Composite check: at least one LULC source must have valid data
+        glc10_ok = any(
+            c.path == "properties/land_cover/glc10" and c.severity == "PASS" for c in self._checks
+        )
+        modis_ok = any(
+            c.path == "properties/land_cover/modis_lc" and c.severity == "PASS"
+            for c in self._checks
+        )
+        if not glc10_ok and not modis_ok:
+            self._checks.append(
+                CheckResult(
+                    section="properties",
+                    path="properties/land_cover",
+                    severity="FAIL",
+                    message="No valid land cover data (need at least one of GLC10 or MODIS)",
+                )
+            )
 
         fp = fingerprint_container(self._root, self._field_uids)
 

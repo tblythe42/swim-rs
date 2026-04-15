@@ -873,12 +873,16 @@ def _write_properties_from_container(
     # Units: mm/day (see `src/swimrs/units.py` PROCESS_CANONICAL_UNITS['ksat']).
     ksat = np.array([props.get(fid, {}).get("ksat", 10.0) for fid in fids])
 
-    # Perennial status from LULC code
-    crops_codes = {12, 14}
+    # Perennial status from LULC class (GLC10-primary, MODIS-fallback)
+    from swimrs.container.schema import is_cropland
+
     perennial = np.array(
         [
-            props.get(fid, {}).get("lulc_code", 0) not in crops_codes
-            and 1 <= props.get(fid, {}).get("lulc_code", 0) <= 17
+            not is_cropland(
+                props.get(fid, {}).get("lulc_class", -1),
+                props.get(fid, {}).get("lulc_source", "glc10"),
+            )
+            and props.get(fid, {}).get("lulc_class", -1) > 0
             for fid in fids
         ]
     )

@@ -98,6 +98,7 @@ def _make_healthy_root(n_fields=10):
             "properties/soils/clay": _FakeArray(np.full(n_fields, 25.0)),
             "properties/soils/sand": _FakeArray(np.full(n_fields, 40.0)),
             "properties/soils/ksat": _FakeArray(np.full(n_fields, 10.0)),
+            "properties/land_cover/glc10": _FakeArray(np.full(n_fields, 10, dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.full(n_fields, 12, dtype="int16")),
             "properties/irrigation/irr": _FakeArray(np.full(n_fields, 0.5)),
             "properties/location/lat": _FakeArray(np.full(n_fields, 45.0)),
@@ -114,10 +115,11 @@ def _make_healthy_root(n_fields=10):
 
 def test_policy_base_rules_always_returned():
     rules = HealthPolicy.for_config({})
-    # Should have at least 3 base rules
-    assert len(rules) >= 3
+    # Should have at least 4 base rules (awc, clay, glc10, modis_lc)
+    assert len(rules) >= 4
     paths = [r.required_path for r in rules]
     assert "properties/soils/awc" in paths
+    assert "properties/land_cover/glc10" in paths
     assert "properties/land_cover/modis_lc" in paths
 
 
@@ -229,22 +231,53 @@ def test_partial_nan_property_is_warn():
 
 
 def test_all_fill_lulc_is_fail():
+    """Both GLC10 and MODIS all-fill triggers composite FAIL."""
     root = _FakeRoot(
         {
             "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
+            "properties/land_cover/glc10": _FakeArray(np.full(5, -1, dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.full(5, -1, dtype="int16")),
         }
     )
     checker = ContainerHealthCheck(root, [str(i) for i in range(5)])
     report = checker.run()
 
-    lc_checks = [
+    # Both individual checks should FAIL
+    glc10_checks = [
+        c
+        for c in report.checks
+        if c.path == "properties/land_cover/glc10" and c.section == "properties"
+    ]
+    assert len(glc10_checks) == 1
+    assert glc10_checks[0].severity == "FAIL"
+
+    modis_checks = [
         c
         for c in report.checks
         if c.path == "properties/land_cover/modis_lc" and c.section == "properties"
     ]
-    assert len(lc_checks) == 1
-    assert lc_checks[0].severity == "FAIL"
+    assert len(modis_checks) == 1
+    assert modis_checks[0].severity == "FAIL"
+
+    # Composite check should also FAIL
+    composite = [c for c in report.checks if c.path == "properties/land_cover"]
+    assert len(composite) == 1
+    assert composite[0].severity == "FAIL"
+
+
+def test_glc10_only_lulc_is_pass():
+    """GLC10 present and valid, MODIS absent -> no composite FAIL."""
+    root = _FakeRoot(
+        {
+            "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
+            "properties/land_cover/glc10": _FakeArray(np.array([10], dtype="int16")),
+        }
+    )
+    checker = ContainerHealthCheck(root, ["0"])
+    report = checker.run()
+
+    composite = [c for c in report.checks if c.path == "properties/land_cover"]
+    assert len(composite) == 0  # No composite FAIL
 
 
 def test_policy_mask_mode_irrigation_without_irr_is_fail():
@@ -252,6 +285,7 @@ def test_policy_mask_mode_irrigation_without_irr_is_fail():
         {
             "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
             "properties/soils/awc": _FakeArray(np.array([0.15])),
+            "properties/land_cover/glc10": _FakeArray(np.array([10], dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.array([12], dtype="int16")),
         }
     )
@@ -268,6 +302,7 @@ def test_policy_etf_target_model_missing_is_fail():
         {
             "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
             "properties/soils/awc": _FakeArray(np.array([0.15])),
+            "properties/land_cover/glc10": _FakeArray(np.array([10], dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.array([12], dtype="int16")),
         }
     )
@@ -286,6 +321,7 @@ def test_forward_run_profile_does_not_fail_missing_calibration_targets():
             "geometry/uid": _FakeArray(["0"]),
             "properties/soils/awc": _FakeArray(np.array([0.15])),
             "properties/soils/clay": _FakeArray(np.array([25.0])),
+            "properties/land_cover/glc10": _FakeArray(np.array([10], dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.array([12], dtype="int16")),
             "properties/irrigation/irr": _FakeArray(np.array([0.5])),
             "properties/irrigation/irr_yearly": _FakeArray(['{"2020": {"irrigated": 1}}']),
@@ -363,6 +399,7 @@ def test_raise_on_fail():
         {
             "time/daily": _FakeArray(np.array(["2020-01-01"], dtype="datetime64[D]")),
             "properties/soils/awc": _FakeArray(np.full(5, np.nan)),
+            "properties/land_cover/glc10": _FakeArray(np.full(5, -1, dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.full(5, -1, dtype="int16")),
         }
     )
@@ -486,6 +523,7 @@ def _make_irr_inv_irr_root(n_fields=5, irr_valid=None, inv_irr_valid=None):
         {
             "time/daily": _FakeArray(time_arr),
             "properties/soils/awc": _FakeArray(np.full(n_fields, 0.15)),
+            "properties/land_cover/glc10": _FakeArray(np.full(n_fields, 10, dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.full(n_fields, 12, dtype="int16")),
             "remote_sensing/ndvi/landsat/irr": _FakeArray(irr_data),
             "remote_sensing/ndvi/landsat/inv_irr": _FakeArray(inv_irr_data),
@@ -554,6 +592,7 @@ def test_field_coverage_no_mask_fail():
         {
             "time/daily": _FakeArray(time_arr),
             "properties/soils/awc": _FakeArray(np.full(n_fields, 0.15)),
+            "properties/land_cover/glc10": _FakeArray(np.full(n_fields, 10, dtype="int16")),
             "properties/land_cover/modis_lc": _FakeArray(np.full(n_fields, 12, dtype="int16")),
             "remote_sensing/ndvi/landsat/no_mask": _FakeArray(no_mask_data),
         }

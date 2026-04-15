@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from swimrs.container import schema
+
 from .base import Component
 
 if TYPE_CHECKING:
@@ -1025,8 +1027,6 @@ class Calculator(Component):
 
         # LULC needed for both paths: use_lulc (original) and use_mask (fallback)
         lulc_by_site = self._get_lulc_by_site(ds.coords["site"].values)
-        # MODIS cropland codes
-        cropland_codes = {12, 14}
 
         # Track years needing backfill (irrigated but no windows detected)
         backfill_tracker = {}
@@ -1037,8 +1037,11 @@ class Calculator(Component):
             fallow_years = []
             years_needing_backfill = []
 
-            # Check if field is cropped (LULC 12, 13, 14)
-            cropped = lulc_by_site.get(site_str, 12) in [12, 13, 14] if use_lulc else True
+            # Check if field is cropped
+            lulc_info = lulc_by_site.get(site_str)
+            cropped = schema.is_cropland(*lulc_info) if lulc_info else False
+            if not use_lulc:
+                cropped = True
 
             # Get per-year irrigation properties for this site if using mask mode
             site_irr_props = irr_props.get(site_str, {}) if irr_props else {}
@@ -1075,8 +1078,7 @@ class Calculator(Component):
                     # For cropland the water source is irrigation, not groundwater.
                     if not irrigated and gwsub_data:
                         yr_gw = gwsub_data.get(site_str, {}).get(int(yr), {})
-                        lulc_code = lulc_by_site.get(site_str, -1)
-                        if yr_gw.get("subsidized", 0) and lulc_code in cropland_codes:
+                        if yr_gw.get("subsidized", 0) and cropped:
                             irrigated = True
                             f_irr = 1.0
 
@@ -1137,21 +1139,43 @@ class Calculator(Component):
 
         return results
 
-    def _get_lulc_by_site(self, sites: np.ndarray) -> dict[str, int]:
-        """Get LULC code for each site from container properties."""
-        lulc_path = "properties/land_cover/modis_lc"
-        if lulc_path not in self._state.root:
+    def _get_lulc_by_site(self, sites: np.ndarray) -> dict[str, tuple[int, str]]:
+        """Get LULC code and source for each site from container properties.
+
+        Returns dict mapping site_str -> (code, source) where source is
+        "glc10" or "modis". GLC10 is preferred; MODIS is the fallback.
+        """
+        glc10_path = "properties/land_cover/glc10"
+        modis_path = "properties/land_cover/modis_lc"
+
+        has_glc10 = glc10_path in self._state.root
+        has_modis = modis_path in self._state.root
+        if not has_glc10 and not has_modis:
             return {}
 
-        lulc_arr = self._state.root[lulc_path]
+        glc10_arr = self._state.root[glc10_path] if has_glc10 else None
+        modis_arr = self._state.root[modis_path] if has_modis else None
+
         result = {}
         for site in sites:
             site_str = str(site)
-            if site_str in self._state._uid_to_index:
-                idx = self._state._uid_to_index[site_str]
-                value = lulc_arr[idx]
-                if not np.isnan(value):
-                    result[site_str] = int(value)
+            if site_str not in self._state._uid_to_index:
+                continue
+            idx = self._state._uid_to_index[site_str]
+
+            # Try GLC10 first
+            if glc10_arr is not None:
+                val = glc10_arr[idx]
+                if not np.isnan(val) and int(val) != -1:
+                    result[site_str] = (int(val), "glc10")
+                    continue
+
+            # Fall back to MODIS
+            if modis_arr is not None:
+                val = modis_arr[idx]
+                if not np.isnan(val) and int(val) != -1:
+                    result[site_str] = (int(val), "modis")
+
         return result
 
     def _get_yearly_irrigation_properties(self) -> dict[str, dict[str, float]]:

@@ -39,6 +39,21 @@ SKIP_FIDS = {
 }
 
 
+def _glc10_lulc_map(gdf):
+    from swimrs.container.schema import GLC10_TO_MODIS_ROOTING
+
+    result = {}
+    for _, row in gdf.iterrows():
+        sid = row["sid"]
+        glc = row.get("glc10_lc")
+        if pd.notna(glc) and int(glc) > 0:
+            result[sid] = GLC10_TO_MODIS_ROOTING.get(int(glc), int(glc))
+        else:
+            modis = row.get("modis_lc")
+            result[sid] = int(modis) if pd.notna(modis) else 0
+    return result
+
+
 def _load_config():
     project_dir = Path(__file__).resolve().parent
     conf = project_dir / "6_Flux_International.toml"
@@ -153,7 +168,7 @@ def main():
     print("\n=== Evaluating calibrated model against flux tower ET ===")
 
     gdf = gpd.read_file(cfg.fields_shapefile, engine="fiona")
-    lulc_map = dict(zip(gdf["sid"], gdf["modis_lc"]))
+    lulc_map = _glc10_lulc_map(gdf)
     LULC_NAMES = {
         1: "ENF",
         2: "EBF",

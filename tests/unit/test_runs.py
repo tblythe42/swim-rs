@@ -29,6 +29,13 @@ def _build_runnable_container(tmp_path):
     ksat = container._create_property_array("properties/soils/ksat")
     ksat[:] = np.array([10.0], dtype=np.float32)
 
+    glc10 = container._create_property_array(
+        "properties/land_cover/glc10",
+        dtype="int16",
+        fill_value=-1,
+    )
+    glc10[:] = np.array([10], dtype=np.int16)
+
     modis = container._create_property_array(
         "properties/land_cover/modis_lc",
         dtype="int16",

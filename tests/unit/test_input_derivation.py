@@ -45,50 +45,70 @@ class TestCN2FromClay:
 class TestPerennialFromLULC:
     """Tests for perennial status derivation from LULC codes.
 
-    Logic: perennial = lulc_code not in {12, 14} AND 1 <= lulc_code <= 17
+    Uses schema.is_cropland() for GLC10-primary, MODIS-fallback logic.
+    perennial = not is_cropland(code, source) AND code > 0
     """
 
-    def test_cropland_not_perennial(self):
-        """LULC 12 (cropland) is not perennial."""
-        codes = {12, 14}
-        lulc = 12
-        perennial = lulc not in codes and 1 <= lulc <= 17
+    def test_glc10_cropland_not_perennial(self):
+        """GLC10 10 (cropland) is not perennial."""
+        from swimrs.container.schema import is_cropland
+
+        assert is_cropland(10, "glc10") is True
+        perennial = not is_cropland(10, "glc10") and 10 > 0
         assert perennial is False
 
-    def test_cropland_mosaic_not_perennial(self):
-        """LULC 14 (cropland/natural mosaic) is not perennial."""
-        codes = {12, 14}
-        lulc = 14
-        perennial = lulc not in codes and 1 <= lulc <= 17
+    def test_modis_cropland_not_perennial(self):
+        """MODIS 12 (cropland) is not perennial."""
+        from swimrs.container.schema import is_cropland
+
+        assert is_cropland(12, "modis") is True
+        perennial = not is_cropland(12, "modis") and 12 > 0
         assert perennial is False
 
-    def test_grassland_is_perennial(self):
-        """LULC 10 (grassland) is perennial."""
-        codes = {12, 14}
-        lulc = 10
-        perennial = lulc not in codes and 1 <= lulc <= 17
+    def test_modis_cropland_mosaic_not_perennial(self):
+        """MODIS 14 (cropland/natural mosaic) is not perennial."""
+        from swimrs.container.schema import is_cropland
+
+        perennial = not is_cropland(14, "modis") and 14 > 0
+        assert perennial is False
+
+    def test_glc10_grassland_is_perennial(self):
+        """GLC10 30 (grassland) is perennial."""
+        from swimrs.container.schema import is_cropland
+
+        perennial = not is_cropland(30, "glc10") and 30 > 0
         assert perennial is True
 
-    def test_forest_is_perennial(self):
-        """LULC 1 (evergreen needleleaf forest) is perennial."""
-        codes = {12, 14}
-        lulc = 1
-        perennial = lulc not in codes and 1 <= lulc <= 17
+    def test_glc10_forest_is_perennial(self):
+        """GLC10 20 (forest) is perennial."""
+        from swimrs.container.schema import is_cropland
+
+        perennial = not is_cropland(20, "glc10") and 20 > 0
+        assert perennial is True
+
+    def test_modis_grassland_is_perennial(self):
+        """MODIS 10 (grassland) is perennial."""
+        from swimrs.container.schema import is_cropland
+
+        perennial = not is_cropland(10, "modis") and 10 > 0
         assert perennial is True
 
     def test_invalid_code_not_perennial(self):
-        """LULC 0 (invalid) is not perennial."""
-        codes = {12, 14}
-        lulc = 0
-        perennial = lulc not in codes and 1 <= lulc <= 17
+        """Negative code is not perennial."""
+        from swimrs.container.schema import is_cropland
+
+        perennial = not is_cropland(-1, "glc10") and -1 > 0
         assert perennial is False
 
-    def test_vectorized_perennial(self):
-        """Vectorized perennial derivation over array of LULC codes."""
-        codes = np.array([12, 14, 10, 1, 0])
-        crops_codes = {12, 14}
-        perennial = np.array([c not in crops_codes and 1 <= c <= 17 for c in codes])
-        assert_array_equal(perennial, [False, False, True, True, False])
+    def test_vectorized_perennial_glc10(self):
+        """Vectorized perennial derivation over GLC10 codes."""
+        from swimrs.container.schema import is_cropland
+
+        codes = np.array([10, 20, 30, 40, -1])
+        perennial = np.array([not is_cropland(c, "glc10") and c > 0 for c in codes])
+        # 10=Crop(not perennial), 20=Forest(perennial), 30=Grass(perennial),
+        # 40=Shrub(perennial), -1=invalid(not perennial)
+        assert_array_equal(perennial, [False, True, True, True, False])
 
 
 class TestVariableAliasResolution:

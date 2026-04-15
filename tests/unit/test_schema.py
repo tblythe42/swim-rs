@@ -9,9 +9,13 @@ Tests cover:
 """
 
 from swimrs.container.schema import (
+    GLC10_TO_MODIS_ROOTING,
     ROOTING_DEPTH_BY_LULC,
+    UNKNOWN_ROOTING_DEFAULT,
     SwimSchema,
+    get_rooting_code,
     get_rooting_depth,
+    is_cropland,
 )
 
 
@@ -209,10 +213,10 @@ class TestGetRootingDepth:
         assert depth_mean < depth_max
         assert depth_mean == ROOTING_DEPTH_BY_LULC[12].mean_depth
 
-    def test_unknown_code_falls_back_to_cropland(self):
-        """Unknown LULC code falls back to code 12 (cropland)."""
+    def test_unknown_code_falls_back_to_grassland(self):
+        """Unknown LULC code falls back to UNKNOWN_ROOTING_DEFAULT (grassland)."""
         depth = get_rooting_depth(999)
-        expected_depth = get_rooting_depth(12)
+        expected_depth = get_rooting_depth(UNKNOWN_ROOTING_DEFAULT)
         assert depth == expected_depth
 
     def test_all_known_codes_return_positive_depth(self):
@@ -220,3 +224,55 @@ class TestGetRootingDepth:
         for code in ROOTING_DEPTH_BY_LULC:
             depth = get_rooting_depth(code)
             assert depth > 0, f"Code {code} has non-positive depth"
+
+
+class TestIsCropland:
+    """Tests for is_cropland()."""
+
+    def test_glc10_cropland(self):
+        assert is_cropland(10, "glc10") is True
+
+    def test_glc10_non_cropland(self):
+        for code in [20, 30, 40, 50, 60, 70, 80, 90, 100]:
+            assert is_cropland(code, "glc10") is False, f"GLC10 {code} should not be cropland"
+
+    def test_modis_cropland_codes(self):
+        for code in [12, 13, 14]:
+            assert is_cropland(code, "modis") is True, f"MODIS {code} should be cropland"
+
+    def test_modis_non_cropland(self):
+        for code in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16]:
+            assert is_cropland(code, "modis") is False, f"MODIS {code} should not be cropland"
+
+    def test_invalid_code(self):
+        assert is_cropland(-1, "glc10") is False
+        assert is_cropland(-1, "modis") is False
+
+
+class TestGetRootingCode:
+    """Tests for get_rooting_code()."""
+
+    def test_glc10_cropland_maps_to_modis_12(self):
+        assert get_rooting_code(10, "glc10") == 12
+
+    def test_glc10_forest_maps_to_modis_4(self):
+        assert get_rooting_code(20, "glc10") == 4
+
+    def test_glc10_grassland_maps_to_modis_10(self):
+        assert get_rooting_code(30, "glc10") == 10
+
+    def test_glc10_unknown_defaults_to_grassland(self):
+        assert get_rooting_code(999, "glc10") == UNKNOWN_ROOTING_DEFAULT
+
+    def test_modis_known_code_returned_as_is(self):
+        assert get_rooting_code(12, "modis") == 12
+        assert get_rooting_code(1, "modis") == 1
+
+    def test_modis_unknown_defaults_to_grassland(self):
+        assert get_rooting_code(999, "modis") == UNKNOWN_ROOTING_DEFAULT
+
+    def test_all_glc10_keys_have_valid_modis_mapping(self):
+        for glc_code, modis_code in GLC10_TO_MODIS_ROOTING.items():
+            assert modis_code in ROOTING_DEPTH_BY_LULC, (
+                f"GLC10 {glc_code} maps to MODIS {modis_code} which has no rooting depth"
+            )

@@ -384,6 +384,7 @@ class ContainerState:
             "clay": "properties/soils/clay",
             "sand": "properties/soils/sand",
             "ksat": "properties/soils/ksat",
+            "glc10": "properties/land_cover/glc10",
             "modis_lc": "properties/land_cover/modis_lc",
             "cdl": "properties/land_cover/cdl",
             "irr": "properties/irrigation/irr",

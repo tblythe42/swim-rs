@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from swimrs.container.schema import get_rooting_depth
+from swimrs.container.schema import get_rooting_code, get_rooting_depth
 
 from .base import Component
 
@@ -632,16 +632,33 @@ class Exporter(Component):
                     except (KeyError, TypeError):
                         continue
 
-            # Derive root_depth and lulc_code from MODIS land cover
-            if "modis_lc" in props_ds:
+            # Derive lulc_class, lulc_source, root_depth from GLC10 (primary) or MODIS (fallback)
+            lulc_class = None
+            lulc_source = None
+
+            if "glc10" in props_ds:
                 try:
-                    lc_val = props_ds["modis_lc"].sel(site=field_uid).values
-                    if not np.isnan(lc_val):
-                        lulc_code = int(lc_val)
-                        field_props["lulc_code"] = lulc_code
-                        field_props["root_depth"] = get_rooting_depth(lulc_code)
+                    val = props_ds["glc10"].sel(site=field_uid).values
+                    if not np.isnan(val) and int(val) != -1:
+                        lulc_class = int(val)
+                        lulc_source = "glc10"
                 except (KeyError, TypeError):
                     pass
+
+            if lulc_class is None and "modis_lc" in props_ds:
+                try:
+                    val = props_ds["modis_lc"].sel(site=field_uid).values
+                    if not np.isnan(val) and int(val) != -1:
+                        lulc_class = int(val)
+                        lulc_source = "modis"
+                except (KeyError, TypeError):
+                    pass
+
+            if lulc_class is not None:
+                field_props["lulc_class"] = lulc_class
+                field_props["lulc_source"] = lulc_source
+                rooting_code = get_rooting_code(lulc_class, lulc_source)
+                field_props["root_depth"] = get_rooting_depth(rooting_code)
 
             if field_props:
                 props[field_uid] = field_props
