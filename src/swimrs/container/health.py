@@ -144,6 +144,7 @@ class HealthPolicy:
 
         # Dynamic rules for etf_target_model
         etf_model = config.get("etf_target_model")
+        members = config.get("etf_ensemble_members")
         if etf_model and health_profile != cls.PROFILE_FORWARD_RUN:
             instrument = config.get("etf_target_instrument", "landsat")
             if mask_mode == "irrigation":
@@ -152,49 +153,56 @@ class HealthPolicy:
                 mask = "no_mask"
             else:
                 mask = "inv_irr"
-            path = f"remote_sensing/etf/{instrument}/{etf_model}/{mask}"
-            rules.append(
-                PolicyRule(
-                    "etf_target_model",
-                    etf_model,
-                    path,
-                    "exists",
-                    0,
-                    "FAIL",
-                    f"etf_target_model={etf_model} requires ETf array at {path}",
-                )
-            )
-            # Field-level coverage for ETf
-            if mask_mode == "irrigation":
+            # Skip pre-computed array check when ensemble is computed on-the-fly
+            # from configured members
+            if not (etf_model == "ensemble" and members):
+                path = f"remote_sensing/etf/{instrument}/{etf_model}/{mask}"
                 rules.append(
                     PolicyRule(
                         "etf_target_model",
                         etf_model,
-                        f"remote_sensing/etf/{instrument}/{etf_model}",
-                        "field_coverage_union",
+                        path,
+                        "exists",
                         0,
                         "FAIL",
-                        f"Every field must have ETf ({etf_model}) obs in irr or inv_irr",
+                        f"etf_target_model={etf_model} requires ETf array at {path}",
                     )
                 )
-            elif mask_mode in ("no_mask", "none"):
-                no_mask_path = f"remote_sensing/etf/{instrument}/{etf_model}/no_mask"
-                rules.append(
-                    PolicyRule(
-                        "etf_target_model",
-                        etf_model,
-                        no_mask_path,
-                        "field_coverage",
-                        0,
-                        "FAIL",
-                        f"mask_mode=no_mask requires ETf ({etf_model}) for all fields",
+                # Field-level coverage for ETf
+                if mask_mode == "irrigation":
+                    rules.append(
+                        PolicyRule(
+                            "etf_target_model",
+                            etf_model,
+                            f"remote_sensing/etf/{instrument}/{etf_model}",
+                            "field_coverage_union",
+                            0,
+                            "FAIL",
+                            f"Every field must have ETf ({etf_model}) obs in irr or inv_irr",
+                        )
                     )
-                )
+                elif mask_mode in ("no_mask", "none"):
+                    no_mask_path = f"remote_sensing/etf/{instrument}/{etf_model}/no_mask"
+                    rules.append(
+                        PolicyRule(
+                            "etf_target_model",
+                            etf_model,
+                            no_mask_path,
+                            "field_coverage",
+                            0,
+                            "FAIL",
+                            f"mask_mode=no_mask requires ETf ({etf_model}) for all fields",
+                        )
+                    )
 
         # Dynamic rules for ensemble members
-        members = config.get("etf_ensemble_members")
         if members and health_profile != cls.PROFILE_FORWARD_RUN:
-            mask = "irr" if mask_mode == "irrigation" else "inv_irr"
+            if mask_mode == "irrigation":
+                mask = "irr"
+            elif mask_mode in ("no_mask", "none"):
+                mask = "no_mask"
+            else:
+                mask = "inv_irr"
             for member in members:
                 path = f"remote_sensing/etf/landsat/{member}/{mask}"
                 rules.append(
@@ -224,7 +232,7 @@ class HealthPolicy:
                             f"Every field must have ETf ({member}) obs in irr or inv_irr",
                         )
                     )
-                elif mask_mode == "no_mask":
+                elif mask_mode in ("no_mask", "none"):
                     no_mask_path = f"remote_sensing/etf/landsat/{member}/no_mask"
                     rules.append(
                         PolicyRule(

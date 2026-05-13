@@ -35,7 +35,7 @@ _LANID_2018_2020 = "users/xyhuwmir/LANID/update/LANID2018-2020"
 
 
 def get_lanid() -> ee.Image:
-    """Build a multi-band LANID irrigation mask image for 1987-2024.
+    """Build a multi-band LANID irrigation mask image for 1987-2027.
 
     Returns an ee.Image with bands named ``irr_<year>`` where 1 indicates
     irrigated.  Combines two public LANID assets:
@@ -62,7 +62,7 @@ def get_lanid() -> ee.Image:
         else:
             bands = bands.addBands([image])
 
-    for yr in range(2018, 2025):
+    for yr in range(2018, 2028):
         year = min(yr, 2020)
         band_name = f"irr_{yr}"
         image = (

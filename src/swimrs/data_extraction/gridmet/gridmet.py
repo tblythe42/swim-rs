@@ -105,33 +105,48 @@ def assign_gridmet_ids(
 
     if gridmet_points is not None:
         pts = gpd.read_file(gridmet_points, engine="fiona")
-        if pts.crs != fields_cent.crs:
-            pts = pts.to_crs(fields_cent.crs)
 
         keep_cols = [c for c in [gridmet_id_col, "lat", "lon", "geometry"] if c in pts.columns]
         pts = pts[keep_cols]
 
-        joined = gpd.sjoin_nearest(
-            fields_cent[[feature_id, "geometry"]], pts, how="left", distance_col="dist"
+        # Grid-snap approach: round field centroids to nearest GridMET 1/24-deg cell
+        pts_4326 = pts.to_crs("EPSG:4326") if pts.crs != "EPSG:4326" else pts
+        grid_res = 1.0 / 24.0
+        pts_4326["_rlat"] = (pts_4326.geometry.y / grid_res).round() * grid_res
+        pts_4326["_rlon"] = (pts_4326.geometry.x / grid_res).round() * grid_res
+        lookup = pts_4326.drop_duplicates(subset=["_rlat", "_rlon"]).set_index(["_rlat", "_rlon"])
+
+        fields_4326 = fields.to_crs("EPSG:4326") if fields.crs != "EPSG:4326" else fields
+        centroids = fields_4326.geometry.centroid
+        fields["_rlat"] = (centroids.y / grid_res).round() * grid_res
+        fields["_rlon"] = (centroids.x / grid_res).round() * grid_res
+
+        merged = fields[["_rlat", "_rlon"]].merge(
+            lookup[[gridmet_id_col, "lat", "lon"]],
+            left_on=["_rlat", "_rlon"],
+            right_index=True,
+            how="left",
         )
-
-        fields[gridmet_id_col] = joined[gridmet_id_col].values
+        fields[gridmet_id_col] = merged[gridmet_id_col].values
         fields["STATION_ID"] = fields[gridmet_id_col]
+        fields["LAT"] = merged["lat"].values
+        fields["LON"] = merged["lon"].values
+        fields.drop(columns=["_rlat", "_rlon"], inplace=True)
 
-        pts_indexed = pts.set_index(gridmet_id_col)
-        # Fill lat/lon from centroids if provided on pts
-        for gfid, row in pts_indexed.iterrows():
-            if "lat" in row and "lon" in row:
-                fields.loc[fields[gridmet_id_col] == gfid, "LAT"] = float(row["lat"])
-                fields.loc[fields[gridmet_id_col] == gfid, "LON"] = float(row["lon"])
+        n_unique = fields[gridmet_id_col].nunique()
+        print(f"Mapped {len(fields)} fields to {n_unique} unique GridMET cells")
     else:
         fields[gridmet_id_col] = range(len(fields))
         fields["STATION_ID"] = fields[gridmet_id_col]
 
-    for i, field in tqdm(fields.iterrows(), desc="Fetching elevations", total=fields.shape[0]):
-        g = GridMet("elev", lat=fields.at[i, "LAT"], lon=fields.at[i, "LON"])
-        elev = g.get_point_elevation()
-        fields.at[i, "ELEV"] = elev
+    # Fetch elevation once per unique lat/lon pair
+    unique_locs = fields.drop_duplicates(subset=["LAT", "LON"])[["LAT", "LON"]]
+    elev_cache = {}
+    for _, loc in tqdm(unique_locs.iterrows(), desc="Fetching elevations", total=len(unique_locs)):
+        key = (loc["LAT"], loc["LON"])
+        g = GridMet("elev", lat=key[0], lon=key[1])
+        elev_cache[key] = g.get_point_elevation()
+    fields["ELEV"] = fields.apply(lambda r: elev_cache.get((r["LAT"], r["LON"])), axis=1)
 
     oshape = fields.shape[0]
     fields = fields[~pd.isna(fields[gridmet_id_col])]
@@ -272,8 +287,8 @@ def download_gridmet(
                 r = gridmet_factors_dict[g_fid]
                 lat, lon = r["lat"], r["lon"]
             else:
-                lat = fields.at[fields[gridmet_id_col] == int(g_fid), "LAT"].values[0]
-                lon = fields.at[fields[gridmet_id_col] == int(g_fid), "LON"].values[0]
+                lat = fields.loc[fields[gridmet_id_col] == int(g_fid), "LAT"].values[0]
+                lon = fields.loc[fields[gridmet_id_col] == int(g_fid), "LON"].values[0]
 
             # Download data from THREDDS
             df = pd.DataFrame()

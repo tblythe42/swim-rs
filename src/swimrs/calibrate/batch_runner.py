@@ -292,7 +292,7 @@ def build_batch(ctx: BatchContext, batch_fids, batch_id):
             "dropped_fids": dropped_fids,
         }
     except ValueError as exc:
-        if "NaN state" not in str(exc):
+        if "NaN state" not in str(exc) and "Non-finite state" not in str(exc):
             return {
                 "status": "build_failed",
                 "n_fields": len(batch_fids),

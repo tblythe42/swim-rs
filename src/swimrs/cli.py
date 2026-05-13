@@ -396,7 +396,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             )
             join_path = config.gridmet_mapping_shp
             fields_joined = assign_gridmet_ids(
-                fields=config.gridmet_mapping_shp,
+                fields=config.fields_shapefile,
                 fields_join=join_path,
                 gridmet_points=gridmet_points,
                 field_select=_parse_sites_arg(args.sites),

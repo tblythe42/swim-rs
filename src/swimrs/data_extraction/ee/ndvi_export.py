@@ -206,7 +206,7 @@ def sparse_sample_ndvi(
         df = df[df.index.isin(select)]
     print(f"Selected {len(df)} of {total_fields} fields")
 
-    s, e = "1987-01-01", "2024-12-31"
+    s, e = "1987-01-01", "2025-12-31"
     irr_coll = ee.ImageCollection(IRR)
     coll = irr_coll.filterDate(s, e).select("classification")
     remap = coll.map(lambda img: img.lt(1))
@@ -219,18 +219,16 @@ def sparse_sample_ndvi(
 
     for fid, row in tqdm(df.iterrows(), desc=f"Extracting {satellite} NDVI", total=df.shape[0]):
         for year in range(start_yr, end_yr + 1):
-            site = row[feature_id]
+            site = str(row[feature_id])
 
             desc = f"ndvi_{site}_{mask_type}_{year}"
 
             if check_dir:
-                if not os.path.isdir(check_dir):
-                    raise ValueError(f"File checking on but directory does not exist: {check_dir}")
-
-                f = os.path.join(check_dir, f"{desc}.csv")
-                if os.path.exists(f):
-                    skipped += 1
-                    continue
+                if os.path.isdir(check_dir):
+                    f = os.path.join(check_dir, f"{desc}.csv")
+                    if os.path.exists(f):
+                        skipped += 1
+                        continue
 
             if mask_type in ["irr", "inv_irr"]:
                 if row[state_col] in STATES:
