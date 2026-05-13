@@ -42,8 +42,8 @@ from swimrs.process.input import build_swim_input
 from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
-TOML = Path(__file__).resolve().parent / "6_Flux_International_SSEBop.toml"
-OUT_DIR = Path(__file__).resolve().parent
+_DEFAULT_TOML = Path(__file__).resolve().parent / "6_Flux_International_SSEBop.toml"
+_DEFAULT_OUT_DIR = Path(__file__).resolve().parent
 
 FLUX_DIRS = [
     Path("/nas/climate/flux_stations/qaqc/ameriflux"),
@@ -227,7 +227,11 @@ def pooled_r2_and_slope(
 # ---------------------------------------------------------------------------
 
 
-def main():
+def main(config_path=None, out_dir=None):
+    TOML = Path(config_path) if config_path else _DEFAULT_TOML
+    global OUT_DIR
+    OUT_DIR = Path(out_dir) if out_dir else _DEFAULT_OUT_DIR
+
     cfg = ProjectConfig()
     cfg.read_config(str(TOML), calibrate=False)
 
@@ -595,4 +599,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate SSEBop calibration against flux ET")
+    parser.add_argument("--config", type=str, default=None, help="Path to TOML config")
+    parser.add_argument("--out-dir", type=str, default=None, help="Output directory for results")
+    args = parser.parse_args()
+    main(config_path=args.config, out_dir=args.out_dir)

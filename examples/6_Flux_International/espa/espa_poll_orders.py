@@ -105,7 +105,7 @@ def poll_orders(manifest_path: Path, cred_file: Path) -> None:
             manifest.at[idx, "last_checked"] = now
 
             total_items = sum(counts.values())
-            n_done = counts.get("complete", 0)
+            n_done = counts.get("complete", 0) + counts.get("oncache", 0)
             if order_st == "complete" or (total_items > 0 and n_done == total_items):
                 manifest.at[idx, "order_status"] = "ready_for_download"
 

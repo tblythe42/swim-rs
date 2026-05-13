@@ -1,3 +1,8 @@
+# DEPRECATED — this script is scheduled for removal.
+# The ETf extraction logic has moved to swim-tools/utils/openet_etf.py.
+# Montana SID-specific extraction should use swim-mtdnrc/src/swim_mtdnrc/extraction/sid_etf.py.
+#
+# Original description:
 # ETf extraction for Montana SID fields 2016-2025 using OpenET v2.1 source collections.
 # Outputs per-county CSVs to GCS (same chunking/CLI pattern as sid_ndvi.py).
 

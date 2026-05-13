@@ -9,13 +9,13 @@ from swimrs.data_extraction.ee.ee_utils import is_authorized
 from swimrs.swim.config import ProjectConfig
 
 
-def _load_config() -> ProjectConfig:
+def _load_config(config_path: str | None = None) -> ProjectConfig:
     project_dir = Path(__file__).resolve().parent
-    conf_path = project_dir / "6_Flux_International.toml"
+    conf_path = Path(config_path) if config_path else project_dir / "6_Flux_International.toml"
     config = ProjectConfig()
 
-    # Prefer the configured root (e.g., /data/ssd2/swim) when available; otherwise run in-repo.
-    if os.path.isdir("/data/ssd2/swim"):
+    # Prefer the configured root when available; otherwise run in-repo.
+    if os.path.isdir("/data/ssd1/swim") or os.path.isdir("/data/ssd2/swim"):
         config.read_config(str(conf_path))
     else:
         config.read_config(str(conf_path), project_root_override=str(project_dir.parent))
@@ -189,6 +189,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--project", type=str, default="ee-dgketchum", help="Earth Engine project ID"
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to TOML config (default: 6_Flux_International.toml)",
+    )
 
     args = parser.parse_args()
 
@@ -196,7 +202,7 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
-    cfg = _load_config()
+    cfg = _load_config(args.config)
     sites = args.sites.split(",") if args.sites else None
     exclude = set(args.exclude.split(",")) if args.exclude else set()
     if exclude and sites:

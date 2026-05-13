@@ -26,10 +26,10 @@ from swimrs.container import SwimContainer, create_container, open_container
 from swimrs.swim.config import ProjectConfig
 
 
-def _load_config() -> ProjectConfig:
+def _load_config(config_path: str | None = None) -> ProjectConfig:
     """Load project configuration."""
     project_dir = Path(__file__).resolve().parent
-    conf = project_dir / "6_Flux_International.toml"
+    conf = Path(config_path) if config_path else project_dir / "6_Flux_International.toml"
 
     cfg = ProjectConfig()
     cfg.read_config(str(conf))
@@ -49,7 +49,7 @@ def create_project_container(cfg: ProjectConfig = None, overwrite: bool = False)
     if cfg is None:
         cfg = _load_config()
 
-    container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+    container_path = cfg.container_path or os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
 
     if os.path.exists(container_path) and not overwrite:
         print(f"Opening existing container: {container_path}")
@@ -285,6 +285,12 @@ if __name__ == "__main__":
         default=1.0,
         help="Multiply ETf values by this factor during ingestion (default: 1.0)",
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to TOML config (default: 6_Flux_International.toml)",
+    )
     args = parser.parse_args()
 
     select_sites = None
@@ -292,7 +298,7 @@ if __name__ == "__main__":
         select_sites = [s.strip() for s in args.sites.split(",")]
 
     # Load configuration
-    config = _load_config()
+    config = _load_config(args.config)
 
     # Exclude sites if requested (filter shapefile fields before container creation)
     if args.exclude_sites:

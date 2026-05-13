@@ -83,10 +83,12 @@ def submit_orders(
             manifest[col] = ""
 
     # Find submittable rows: have a payload, no order_id yet (or retryable failures)
+    # Exclude deferred rows regardless of other conditions
+    not_deferred = ~manifest["order_status"].str.startswith("deferred", na=False)
     has_payload = manifest["payload_json"].notna() & (manifest["payload_json"] != "")
     no_order = manifest["order_id"].isna() | (manifest["order_id"] == "")
     retryable = manifest["order_status"] == "submit_failed"
-    submittable = manifest[has_payload & (no_order | retryable)]
+    submittable = manifest[not_deferred & has_payload & (no_order | retryable)]
 
     if submittable.empty:
         print("No submittable rows found.")
