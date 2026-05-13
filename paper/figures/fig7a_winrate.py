@@ -45,11 +45,10 @@ def main():
     shp = gpd.read_file(SHP, engine="fiona")
     lulc_map = dict(zip(shp["site_id"], shp["lc_class"]))
 
-    # Merge lat/lon from shapefile centroids
-    shp_latlon = shp.copy().to_crs(epsg=4326)
-    shp_latlon["lon"] = shp_latlon.geometry.centroid.x
-    shp_latlon["lat"] = shp_latlon.geometry.centroid.y
-    coord_map = dict(zip(shp_latlon["site_id"], zip(shp_latlon["lon"], shp_latlon["lat"])))
+    # Derive centroids in a projected CRS, then transform to lon/lat for plotting.
+    shp_proj = shp.to_crs(epsg=5070)
+    centroids = gpd.GeoSeries(shp_proj.geometry.centroid, crs=shp_proj.crs).to_crs(epsg=4326)
+    coord_map = dict(zip(shp["site_id"], zip(centroids.x, centroids.y)))
 
     df["lulc"] = df["fid"].map(lulc_map)
     df["lon"] = df["fid"].map(lambda f: coord_map.get(f, (np.nan, np.nan))[0])
@@ -58,53 +57,34 @@ def main():
     df["swim_wins"] = df["delta"] > 0
     df = df.dropna(subset=["lon", "lat", "delta"])
 
-    # Background: US states
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
+    # Background: CONUS state boundaries
+    STATES_SHP = "/nas/boundaries/states/us_state_20m/cb_2016_us_state_20m.shp"
+    states = gpd.read_file(STATES_SHP, engine="fiona").to_crs(epsg=4326)
+    conus = states[~states["STATEFP"].isin(["02", "15", "60", "66", "69", "72", "78"])]
 
-        fig = plt.figure(figsize=(12, 6))
-        ax = fig.add_subplot(
-            1, 1, 1, projection=ccrs.AlbersEqualArea(central_longitude=-96, central_latitude=37.5)
-        )
-        ax.set_extent([-125, -66, 24, 50], crs=ccrs.PlateCarree())
-        ax.add_feature(cfeature.STATES, linewidth=0.3, edgecolor="gray")
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
-        transform = ccrs.PlateCarree()
-    except ImportError:
-        fig, _ = plt.subplots(1, 1, figsize=(12, 6))
-        ax = fig.axes[0]
-        transform = None
+    fig = plt.figure(figsize=(12, 6))
+    ax = fig.add_subplot(1, 1, 1)
+    conus.boundary.plot(ax=ax, linewidth=0.4, color="gray", zorder=1)
+    ax.set_xlim(-126, -65)
+    ax.set_ylim(24, 50)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_aspect("equal", adjustable="box")
 
     # Size by |delta|, color by winner
     sizes = np.clip(np.abs(df["delta"].values) * 150, 15, 200)
     colors = [SWIM_COLOR if w else SSEBOP_COLOR for w in df["swim_wins"]]
 
-    if transform is not None:
-        ax.scatter(
-            df["lon"],
-            df["lat"],
-            s=sizes,
-            c=colors,
-            alpha=0.7,
-            edgecolors="white",
-            linewidths=0.3,
-            transform=transform,
-            zorder=5,
-        )
-    else:
-        ax.scatter(
-            df["lon"],
-            df["lat"],
-            s=sizes,
-            c=colors,
-            alpha=0.7,
-            edgecolors="white",
-            linewidths=0.3,
-            zorder=5,
-        )
-        ax.set_xlabel("Longitude")
-        ax.set_ylabel("Latitude")
+    ax.scatter(
+        df["lon"],
+        df["lat"],
+        s=sizes,
+        c=colors,
+        alpha=0.7,
+        edgecolors="white",
+        linewidths=0.3,
+        zorder=5,
+    )
 
     # Legend
     wins = df["swim_wins"].sum()
@@ -153,6 +133,7 @@ def main():
 
     ax.set_title(f"Monthly R²: SWIM vs SSEBop ({total} paired sites)", fontweight="bold")
 
+    fig.tight_layout()
     fig.savefig(OUT_PNG, bbox_inches="tight")
     fig.savefig(OUT_PDF, bbox_inches="tight")
     plt.close(fig)

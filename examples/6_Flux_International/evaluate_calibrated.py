@@ -54,9 +54,9 @@ def _glc10_lulc_map(gdf):
     return result
 
 
-def _load_config():
+def _load_config(config_path=None):
     project_dir = Path(__file__).resolve().parent
-    conf = project_dir / "6_Flux_International.toml"
+    conf = Path(config_path) if config_path else project_dir / "6_Flux_International.toml"
     cfg = ProjectConfig()
     cfg.read_config(str(conf))
     return cfg
@@ -118,8 +118,8 @@ def calc_metrics(obs, mod):
     return {"n": len(obs), "r2": r2, "rmse": rmse, "bias": bias, "kge": kge}
 
 
-def main():
-    cfg = _load_config()
+def main(config_path=None):
+    cfg = _load_config(config_path)
     container = SwimContainer.open(str(cfg.container_path), mode="r")
     all_uids = container.field_uids
 
@@ -251,4 +251,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate calibrated SWIM against flux ET")
+    parser.add_argument("--config", type=str, default=None, help="Path to TOML config")
+    args = parser.parse_args()
+    main(config_path=args.config)
