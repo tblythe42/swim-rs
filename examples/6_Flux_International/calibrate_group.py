@@ -50,11 +50,17 @@ def _site_ids(cfg: ProjectConfig, select: list[str] | None = None) -> list[str]:
 
 
 def export_calibration_bundle(conf_path: Path | None = None) -> None:
-    """Export calibration report, parameter CSV, and batch metadata to results dir.
+    """Export calibration report and parameter CSV to the config-specific results dir.
 
     Must be run *after* batch_runner has ingested calibration into the container.
     This is a standalone post-ingest step, not part of run_group_calibration(),
     because PEST output must be ingested before the container has anything to export.
+
+    Batch provenance (n_batches, phi convergence) is embedded in the container's
+    ``calibration`` group attrs and written into ``calibration.json`` by the report.
+    External metadata files (run_manifest.json, batch_log.json) are not copied
+    because they live in the mutable pest_run_dir and may not correspond to the
+    container state at export time.
     """
     cfg = _load_config(calibrate=True, conf_path=conf_path)
     container_path = getattr(cfg, "container_path", None)
@@ -66,7 +72,6 @@ def export_calibration_bundle(conf_path: Path | None = None) -> None:
     results_dir = _results_dir(cfg, conf_path)
     os.makedirs(results_dir, exist_ok=True)
 
-    # Calibration report and parameter CSV from ingested container state
     container = SwimContainer.open(container_path, mode="r")
     try:
         report = container.calibration_report(output_dir=results_dir)
@@ -76,13 +81,6 @@ def export_calibration_bundle(conf_path: Path | None = None) -> None:
         print(f"\nExported calibration artifacts ({len(df)} fields) to {results_dir}")
     finally:
         container.close()
-
-    # Copy batch metadata for provenance
-    for fname in ["run_manifest.json", "batch_log.json", "batch_manifest.csv"]:
-        src = os.path.join(cfg.pest_run_dir, fname)
-        if os.path.exists(src):
-            shutil.copyfile(src, os.path.join(results_dir, fname))
-            print(f"  Copied {fname}")
 
 
 def run_group_calibration(
@@ -187,9 +185,10 @@ def run_group_calibration(
         shutil.copyfile(spinup_src, os.path.join(out_dir, "spinup.json"))
 
     print(f"Wrote group calibration outputs to {out_dir}")
+    config_flag = f" --config {conf_path}" if conf_path else ""
     print(
         "Next: ingest calibration into the container with batch_runner, "
-        "then run: calibrate_group.py --export-calibration"
+        f"then run: calibrate_group.py{config_flag} --export-calibration"
     )
 
 
