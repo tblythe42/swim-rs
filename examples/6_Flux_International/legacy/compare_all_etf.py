@@ -21,7 +21,9 @@ from sklearn.metrics import r2_score, root_mean_squared_error
 from swimrs.container import SwimContainer
 from swimrs.swim.config import ProjectConfig
 
-TOML = Path(__file__).resolve().parent / "6_Flux_International.toml"
+HERE = Path(__file__).resolve().parent
+EXAMPLE_DIR = HERE if (HERE / "6_Flux_International.toml").exists() else HERE.parent
+TOML = EXAMPLE_DIR / "6_Flux_International.toml"
 FLUX_DIRS = [
     Path("/nas/climate/flux_stations/qaqc/ameriflux"),
     Path("/nas/climate/flux_stations/qaqc/fluxnet"),
@@ -29,7 +31,7 @@ FLUX_DIRS = [
     Path("/nas/climate/flux_stations/qaqc/ozflux"),
 ]
 START_DATE = "1987-01-01"
-OUT_DIR = Path(__file__).resolve().parent
+OUT_DIR = HERE
 MIN_ETO = 0.5  # mm/d — avoid near-zero division
 MIN_PAIRS = 10  # minimum matched obs to compute metrics
 ETF_LO, ETF_HI = 0.05, 2.0

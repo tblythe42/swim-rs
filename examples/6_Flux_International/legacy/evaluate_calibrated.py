@@ -23,6 +23,9 @@ from swimrs.process.input import build_swim_input
 from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
+HERE = Path(__file__).resolve().parent
+EXAMPLE_DIR = HERE if (HERE / "6_Flux_International.toml").exists() else HERE.parent
+
 QAQC_ROOT = "/nas/climate/flux_stations/qaqc"
 QAQC_NETWORKS = ["ameriflux", "fluxnet", "icos", "ozflux"]
 
@@ -55,8 +58,7 @@ def _glc10_lulc_map(gdf):
 
 
 def _load_config(config_path=None):
-    project_dir = Path(__file__).resolve().parent
-    conf = Path(config_path) if config_path else project_dir / "6_Flux_International.toml"
+    conf = Path(config_path) if config_path else EXAMPLE_DIR / "6_Flux_International.toml"
     cfg = ProjectConfig()
     cfg.read_config(str(conf))
     return cfg
@@ -214,7 +216,7 @@ def main(config_path=None):
         )
 
     eval_df = pd.DataFrame(records)
-    out_csv = Path(__file__).resolve().parent / "calibrated_evaluation.csv"
+    out_csv = HERE / "calibrated_evaluation.csv"
     eval_df.to_csv(out_csv, index=False)
     print(f"\nSaved: {out_csv}")
 
@@ -233,7 +235,7 @@ def main(config_path=None):
     )
 
     # Compare with LULC defaults if available
-    defaults_csv = Path(__file__).resolve().parent / "lulc_defaults_evaluation.csv"
+    defaults_csv = HERE / "lulc_defaults_evaluation.csv"
     if defaults_csv.exists():
         print("\n=== Comparison: Calibrated vs LULC Defaults ===")
         defaults_df = pd.read_csv(defaults_csv)

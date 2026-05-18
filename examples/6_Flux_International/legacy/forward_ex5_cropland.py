@@ -23,6 +23,9 @@ from swimrs.process.input import build_swim_input
 from swimrs.process.loop_fast import run_daily_loop_fast
 from swimrs.swim.config import ProjectConfig
 
+HERE = Path(__file__).resolve().parent
+EXAMPLE_DIR = HERE if (HERE / "6_Flux_International.toml").exists() else HERE.parent
+
 QAQC_ROOT = "/nas/climate/flux_stations/qaqc"
 QAQC_NETWORKS = ["ameriflux", "fluxnet", "icos", "ozflux"]
 
@@ -52,8 +55,7 @@ EX5_CROPLAND_PARAMS = {
 
 
 def _load_config():
-    project_dir = Path(__file__).resolve().parent
-    conf = project_dir / "6_Flux_International.toml"
+    conf = EXAMPLE_DIR / "6_Flux_International.toml"
     cfg = ProjectConfig()
     cfg.read_config(str(conf))
     return cfg
@@ -160,8 +162,8 @@ def main():
     print("\n=== Ex5 Cropland Params on Ex6 Sites ===")
 
     # Load comparison results
-    cal_csv = Path(__file__).resolve().parent / "calibrated_evaluation.csv"
-    def_csv = Path(__file__).resolve().parent / "lulc_defaults_evaluation.csv"
+    cal_csv = HERE / "calibrated_evaluation.csv"
+    def_csv = HERE / "lulc_defaults_evaluation.csv"
     cal_eval = pd.read_csv(cal_csv) if cal_csv.exists() else pd.DataFrame()
     def_eval = pd.read_csv(def_csv) if def_csv.exists() else pd.DataFrame()
 
@@ -180,7 +182,7 @@ def main():
         records.append({"sid": uid, **m})
 
     ex5_df = pd.DataFrame(records)
-    out_csv = Path(__file__).resolve().parent / "ex5_cropland_evaluation.csv"
+    out_csv = HERE / "ex5_cropland_evaluation.csv"
     ex5_df.to_csv(out_csv, index=False)
     print(f"Saved: {out_csv}")
 

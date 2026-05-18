@@ -24,7 +24,9 @@ import pandas as pd
 from swimrs.container import SwimContainer
 from swimrs.swim.config import ProjectConfig
 
-TOML = Path(__file__).resolve().parent / "6_Flux_International.toml"
+HERE = Path(__file__).resolve().parent
+EXAMPLE_DIR = HERE if (HERE / "6_Flux_International.toml").exists() else HERE.parent
+TOML = EXAMPLE_DIR / "6_Flux_International.toml"
 START_DATE = "1987-01-01"
 DELTA_CSV = Path("/data/ssd1/swim/6_Flux_International/results/ls_eco_site_delta_18site.csv")
 OUT_ETF_DIR = Path(

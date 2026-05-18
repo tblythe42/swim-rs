@@ -216,6 +216,9 @@ cython_debug/
 
 /examples/logs/
 
+# Per-example local archives created during publication cleanup
+/examples/*/archive/
+
 # Diagnostic scratch work
 examples/diagnostics/
 

@@ -25,11 +25,14 @@ from pathlib import Path
 from swimrs.container import SwimContainer, create_container, open_container
 from swimrs.swim.config import ProjectConfig
 
+EXAMPLE_DIR = Path(__file__).resolve().parent
+if not (EXAMPLE_DIR / "6_Flux_International.toml").exists():
+    EXAMPLE_DIR = EXAMPLE_DIR.parent
+
 
 def _load_config(config_path: str | None = None) -> ProjectConfig:
     """Load project configuration."""
-    project_dir = Path(__file__).resolve().parent
-    conf = Path(config_path) if config_path else project_dir / "6_Flux_International.toml"
+    conf = Path(config_path) if config_path else EXAMPLE_DIR / "6_Flux_International.toml"
 
     cfg = ProjectConfig()
     cfg.read_config(str(conf))

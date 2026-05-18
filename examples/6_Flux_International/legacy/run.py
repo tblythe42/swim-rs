@@ -28,6 +28,10 @@ from swimrs.process.input import build_swim_input
 from swimrs.process.loop import run_daily_loop
 from swimrs.swim.config import ProjectConfig
 
+EXAMPLE_DIR = Path(__file__).resolve().parent
+if not (EXAMPLE_DIR / "6_Flux_International.toml").exists():
+    EXAMPLE_DIR = EXAMPLE_DIR.parent
+
 
 def output_to_dataframe(output, swim_input, field_idx: int) -> pd.DataFrame:
     """Convert DailyOutput arrays to DataFrame for a single field.
@@ -181,8 +185,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    project_dir = Path(__file__).resolve().parent
-    conf = project_dir / "6_Flux_International.toml"
+    conf = EXAMPLE_DIR / "6_Flux_International.toml"
 
     cfg = ProjectConfig()
     cfg.read_config(str(conf))
