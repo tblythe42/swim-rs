@@ -1439,10 +1439,14 @@ def _load_calibrated_params(
     with open(params_path) as f:
         params_data = json.load(f)
 
-    # Map from calibration file names to internal names
+    # Map from calibration file names to internal names.
+    # Accept both legacy PEST names and internal container names so
+    # ingested calibration exported through JSON round-trips correctly.
     name_map = {
         "ks_alpha": "ks_damp",
+        "ks_damp": "ks_damp",
         "kr_alpha": "kr_damp",
+        "kr_damp": "kr_damp",
         "ndvi_k": "ndvi_k",
         "ndvi_0": "ndvi_0",
         "swe_alpha": "swe_alpha",
@@ -1454,7 +1458,7 @@ def _load_calibrated_params(
 
     # Initialize result with empty arrays
     result: dict[str, NDArray[np.float64]] = {}
-    for internal_name in name_map.values():
+    for internal_name in set(name_map.values()):
         result[internal_name] = np.zeros(n_fields, dtype=np.float64)
 
     # Create case-insensitive lookup for params_data

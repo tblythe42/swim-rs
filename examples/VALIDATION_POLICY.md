@@ -309,6 +309,26 @@ Report per-class and all-site aggregates side by side.
 - **Heavy tails:** mean R2 is strongly negative for both models due to a
   handful of catastrophic sites. Median R2 is the informative aggregate.
 
+### Current Canonical Snapshot (May 17, 2026)
+
+#### Daily ET vs Flux Tower (159 paired sites)
+
+| Model | R2 mean | R2 median | RMSE mean | RMSE median | Bias mean | Bias median |
+|-------|---------|-----------|-----------|-------------|-----------|-------------|
+| SWIM | -0.299 | 0.467 | 1.151 | 1.009 | -0.026 | 0.017 |
+| SSEBop | -0.689 | 0.415 | 1.141 | 1.091 | -0.022 | -0.036 |
+
+SWIM daily win rate: 95/159 = 60%
+
+#### Monthly ET vs Flux Tower (143 paired sites)
+
+| Model | R2 mean | R2 median | RMSE mean (mm/mo) | RMSE median (mm/mo) | Bias mean (mm/mo) | Bias median (mm/mo) |
+|-------|---------|-----------|--------------------|--------------------|--------------------|--------------------|
+| SWIM | 0.266 | 0.562 | 27.451 | 20.861 | -1.347 | 0.339 |
+| SSEBop | -0.303 | 0.515 | 27.604 | 25.004 | -0.712 | -0.823 |
+
+SWIM monthly win rate: 95/143 = 66%
+
 ### Diagnostic-Only Comparisons
 
 - Pre-March 31, 2026 outputs (pre-paired-comparison, different masking).
@@ -413,17 +433,21 @@ comparing this to standard fixed-denominator weighting is planned
 
 #### Daily ET vs Flux Tower (58 paired sites)
 
-| Model | R2 mean | R2 median | RMSE mean | Bias mean |
-|-------|---------|-----------|-----------|-----------|
-| SWIM | 0.392 | 0.652 | 1.277 | -0.151 |
-| Ensemble | 0.323 | 0.567 | 1.382 | -0.099 |
+| Model | R2 mean | R2 median | RMSE mean | RMSE median | Bias mean | Bias median |
+|-------|---------|-----------|-----------|-------------|-----------|-------------|
+| SWIM | 0.392 | 0.652 | 1.277 | 1.141 | -0.151 | -0.010 |
+| Ensemble | 0.323 | 0.567 | 1.382 | 1.189 | -0.099 | -0.094 |
+
+SWIM daily win rate: 41/58 = 71%
 
 #### Monthly ET vs Flux Tower (33 paired sites)
 
-| Model | R2 mean | R2 median | RMSE mean (mm/mo) | Bias mean (mm/mo) |
-|-------|---------|-----------|--------------------|--------------------|
-| SWIM | 0.814 | 0.845 | 21.451 | -0.774 |
-| Ensemble | 0.799 | 0.859 | 21.224 | -5.877 |
+| Model | R2 mean | R2 median | RMSE mean (mm/mo) | RMSE median (mm/mo) | Bias mean (mm/mo) | Bias median (mm/mo) |
+|-------|---------|-----------|--------------------|--------------------|--------------------|--------------------|
+| SWIM | 0.814 | 0.845 | 21.451 | 21.474 | -0.774 | 0.326 |
+| Ensemble | 0.799 | 0.859 | 21.224 | 19.591 | -5.877 | -6.697 |
+
+SWIM monthly win rate: 17/33 = 52%
 
 ### Diagnostic-Only Comparisons
 
@@ -463,22 +487,25 @@ uv run python /home/dgketchum/code/swim-rs/examples/5_Flux_Ensemble/evaluate.py 
 
 ### Scope
 
-Multi-site international evaluation. 64 flux tower sites outside the CONUS
-domain (and selected CONUS sites), using ERA5-Land meteorology, HWSD soils,
-and combined Landsat/ECOSTRESS ETf targets.
+Multi-site international cropland evaluation. 75 flux tower sites spanning
+the Americas, Europe, and Oceania, calibrated against a Landsat SSEBop +
+PT-JPL ensemble mean ETf. ERA5-Land meteorology, HWSD soils, no ECOSTRESS.
 
 ### Configuration
 
 | Setting | Value |
 |---------|-------|
-| Sites | 64 international flux sites |
-| Period | 1987-01-01 to 2025-12-31 (publication default) |
-| Calibration target | TBD (Experiments A/B/C) |
-| Meteorology | ERA5-Land (with bias-corrected ETo) |
+| Sites | 75 international cropland flux sites |
+| Period | 2013-01-01 to 2025-12-31 |
+| Calibration target | Landsat ensemble mean (SSEBop + PT-JPL) ETf |
+| PEST++ IES | 200 realizations, 3 iterations, 20 workers, 2 batches |
+| Meteorology | ERA5-Land |
 | Soils | HWSD |
+| Shapefile | `flux_crop_pub_75_150m.shp` |
 | mask_mode | none |
 | runoff_process | cn |
 | refet_type | eto |
+| TOML | `6_Flux_International_LSEnsemble_POR.toml` |
 
 ### ETf and NDVI Masking: no_mask Only
 
@@ -496,42 +523,79 @@ through `2025-12-31`.
 - A shorter or otherwise different period is allowed only when it is
   explicitly declared in the experiment TOML and the companion experiment
   plan.
-- The Study 1 / Study 2 ablation document at `examples/ablation_plan.md`
-  is the controlling plan when Ex6 is used in cross-example publication
-  framing or ablation logic.
 
-### Canonical Validation Direction
+### Validation Reference
 
-Example 6 headline validation is SWIM vs independent flux tower ET.
+- **Headline benchmark:** SWIM ET vs flux tower ET (energy-balance-corrected
+  ET_corr from multi-network QAQC archive: AmeriFlux, FLUXNET, ICOS, OzFlux).
+- **RS diagnostic benchmark:** native Landsat ETf (ensemble, SSEBop, PT-JPL
+  individually), linearly interpolated to daily, multiplied by ERA5-Land ETo.
+  Both SWIM and RS ETa are scored against flux on identical paired days.
+- Calibration parameters are loaded from the container (ingested by
+  batch_runner); no external `.par.csv` is required.
 
-- There is no OpenET-style headline benchmark for the international cohort.
-- Container ETf products such as Landsat PT-JPL or ECOSTRESS PT-JPL are
-  calibration targets and diagnostic references, not the headline validation
-  benchmark.
-- The common paired-comparison and site-minimum-data rules from the top of
-  this document still apply.
-
-### Anticipated Nuances
+### Known Limitations
 
 - **No OpenET reference:** international sites lack OpenET coverage, so
-  the SWIM-vs-OpenET head-to-head is not applicable. Validation is SWIM
-  vs flux tower ET only, with SSEBop/PT-JPL container ETf as diagnostic
-  reference where available.
+  the SWIM-vs-OpenET head-to-head is not applicable.
 - **ERA5 bias correction:** ETo from ERA5-Land is systematically biased
   relative to station observations. A correction pipeline
   (`examples/6_Flux_International/met/`) applies monthly multiplicative
-  factors derived from ag-met station comparisons.
-- **ECOSTRESS:** Experiment B and C use ECOSTRESS thermal ETf alongside or
-  instead of Landsat, providing higher temporal density but different
-  spatial footprint and noise characteristics.
-- **Multi-network flux data:** QAQC archive spans AmeriFlux, FLUXNET,
-  ICOS, and OzFlux networks with varying data quality conventions.
+  factors derived from ag-met station comparisons. Coverage is incomplete
+  for some arid and European sites.
+- **Multi-network flux data:** QAQC archive spans four networks with
+  varying data quality conventions.
 - **Site minimum data threshold** applies as in the common framework
-  (90 days, 3 qualifying months). Some international sites may fall below
-  this threshold due to shorter or gappier flux records.
+  (90 days, 3 qualifying months). 4 of 75 container sites lack post-2013
+  flux data and are excluded from validation automatically.
+
+### Current Canonical Snapshot (May 17, 2026)
+
+Evaluation mode: `evaluate.py --config 6_Flux_International_LSEnsemble_POR.toml`
+(daily, paired SWIM vs RS ensemble ETa vs flux).
+
+#### Daily ET vs Flux Tower (71 paired sites)
+
+| Model | R2 mean | R2 median | KGE mean | KGE median | RMSE median | Bias median |
+|-------|---------|-----------|----------|------------|-------------|-------------|
+| SWIM | 0.268 | 0.618 | 0.577 | 0.696 | 0.933 | -0.043 |
+| RS Ensemble | 0.455 | 0.650 | 0.633 | 0.703 | 0.915 | -0.067 |
+
+SWIM R2 win rate vs RS Ensemble: 29/71 = 41%
+SWIM KGE win rate vs RS Ensemble: 29/71 = 41%
+
+#### Daily ET vs Flux Tower — per-model RS benchmarks
+
+| RS Model | n sites | SWIM R2 med | RS R2 med | SWIM R2 win | SWIM KGE win |
+|----------|---------|-------------|-----------|-------------|--------------|
+| LS SSEBop | 64 | 0.626 | 0.557 | 64% | 66% |
+| LS PT-JPL | 71 | 0.618 | 0.618 | 49% | 45% |
+| LS Ensemble | 71 | 0.618 | 0.650 | 41% | 41% |
+
+#### Monthly ET vs Flux Tower (54 paired sites)
+
+| Model | R2 mean | R2 median | KGE mean | KGE median | RMSE median (mm/mo) | Bias median (mm/mo) |
+|-------|---------|-----------|----------|------------|---------------------|---------------------|
+| SWIM | -0.121 | 0.652 | 0.507 | 0.647 | 21.772 | 2.479 |
+| RS Ensemble | 0.180 | 0.679 | 0.558 | 0.669 | 21.943 | 3.369 |
 
 ### Canonical Commands
 
-Canonical Ex6 validation commands are experiment-specific and must specify
-the parameter file and container explicitly, consistent with the common
-framework. Do not rely on automatic parameter discovery.
+```bash
+uv run python /home/dgketchum/code/swim-rs/examples/6_Flux_International/evaluate.py \
+  --config /home/dgketchum/code/swim-rs/examples/6_Flux_International/6_Flux_International_LSEnsemble_POR.toml
+
+uv run python /home/dgketchum/code/swim-rs/examples/6_Flux_International/evaluate.py \
+  --config /home/dgketchum/code/swim-rs/examples/6_Flux_International/6_Flux_International_LSEnsemble_POR.toml \
+  --monthly
+```
+
+### Data Paths
+
+| Resource | Path |
+|----------|------|
+| Container | `/data/ssd1/swim/6_Flux_International/data/6_Flux_International_ls_ensemble_por.swim` |
+| Evaluation script | `examples/6_Flux_International/evaluate.py` |
+| TOML | `examples/6_Flux_International/6_Flux_International_LSEnsemble_POR.toml` |
+| Results | `/data/ssd1/swim/6_Flux_International/results/6_Flux_International_LSEnsemble_POR/` |
+| Detailed notes | `examples/6_Flux_International/notes/LS_ENSEMBLE_POR_RESULTS.md` |

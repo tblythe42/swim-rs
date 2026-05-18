@@ -26,6 +26,17 @@ def _load_config(calibrate: bool = True, conf_path: Path | None = None) -> Proje
     return cfg
 
 
+def _results_dir(cfg: ProjectConfig, conf_path: Path | None = None) -> str:
+    base = os.path.join(cfg.project_ws, "results")
+    if conf_path is None:
+        return base
+    return os.path.join(base, conf_path.stem)
+
+
+def _group_results_dir(cfg: ProjectConfig, conf_path: Path | None = None) -> str:
+    return os.path.join(_results_dir(cfg, conf_path), "group")
+
+
 def _site_ids(cfg: ProjectConfig, select: list[str] | None = None) -> list[str]:
     gdf = gpd.read_file(cfg.fields_shapefile, engine="fiona")
     if cfg.feature_id_col not in gdf.columns:
@@ -36,6 +47,30 @@ def _site_ids(cfg: ProjectConfig, select: list[str] | None = None) -> list[str]:
     if select:
         ids = [i for i in ids if i in set(select)]
     return ids
+
+
+def _export_calibration_artifacts(cfg: ProjectConfig, conf_path: Path | None = None) -> None:
+    """Export calibration report, parameter CSV, and metadata to the results dir."""
+    container_path = getattr(cfg, "container_path", None)
+    if container_path is None:
+        container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+    if not os.path.exists(container_path):
+        print(f"WARNING: container not found at {container_path}, skipping calibration export")
+        return
+
+    results_dir = _results_dir(cfg, conf_path)
+    os.makedirs(results_dir, exist_ok=True)
+
+    container = SwimContainer.open(container_path, mode="r")
+    try:
+        report = container.calibration_report(output_dir=results_dir)
+        df = report.to_dataframe()
+        df.to_csv(os.path.join(results_dir, "calibration_parameters.csv"), index=False)
+        print(f"Exported calibration artifacts ({len(df)} fields) to {results_dir}")
+    except ValueError as e:
+        print(f"WARNING: calibration export failed: {e}")
+    finally:
+        container.close()
 
 
 def run_group_calibration(
@@ -121,7 +156,7 @@ def run_group_calibration(
     )
 
     # Copy key outputs for inspection
-    out_dir = os.path.join(cfg.project_ws, "results", "group")
+    out_dir = _group_results_dir(cfg, conf_path)
     os.makedirs(out_dir, exist_ok=True)
 
     for fname in [
@@ -138,6 +173,17 @@ def run_group_calibration(
     spinup_src = cfg.spinup
     if spinup_src and os.path.exists(spinup_src):
         shutil.copyfile(spinup_src, os.path.join(out_dir, "spinup.json"))
+
+    # Copy batch metadata to results dir for provenance
+    results_dir = _results_dir(cfg, conf_path)
+    os.makedirs(results_dir, exist_ok=True)
+    for fname in ["run_manifest.json", "batch_log.json", "batch_manifest.csv"]:
+        src = os.path.join(cfg.pest_run_dir, fname)
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(results_dir, fname))
+
+    # Export calibration report artifacts from the container
+    _export_calibration_artifacts(cfg, conf_path)
 
     print(f"Wrote group calibration outputs to {out_dir}")
 

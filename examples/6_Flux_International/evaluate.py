@@ -11,7 +11,7 @@ Key differences from CONUS examples:
     - Multi-network flux data search (ameriflux, fluxnet, icos, ozflux)
 
 Usage:
-    python evaluate.py [--par-csv PATH] [--sites SITE1,SITE2,...] [--monthly]
+    python evaluate.py [--config PATH] [--par-csv PATH] [--sites SITE1,SITE2,...] [--monthly]
 """
 
 import argparse
@@ -34,15 +34,96 @@ QAQC_ROOT = "/nas/climate/flux_stations/qaqc"
 QAQC_NETWORKS = ["ameriflux", "fluxnet", "icos", "ozflux"]
 
 
-def _load_config():
+def _load_config(conf_path: Path | None = None):
     project_dir = Path(__file__).resolve().parent
-    conf = project_dir / "6_Flux_International.toml"
+    conf = conf_path if conf_path is not None else project_dir / "6_Flux_International.toml"
     cfg = ProjectConfig()
     if os.path.isdir("/data/ssd1/swim"):
         cfg.read_config(str(conf), calibrate=True)
     else:
         cfg.read_config(str(conf), project_root_override=str(project_dir.parent), calibrate=True)
     return cfg
+
+
+def _results_dir(cfg: ProjectConfig, conf_path: Path | None = None) -> str:
+    base = os.path.join(cfg.project_ws, "results")
+    if conf_path is None:
+        return base
+    return os.path.join(base, conf_path.stem)
+
+
+def _group_results_dir(cfg: ProjectConfig, conf_path: Path | None = None) -> str:
+    return os.path.join(_results_dir(cfg, conf_path), "group")
+
+
+def _default_container_path(cfg: ProjectConfig) -> str:
+    return getattr(cfg, "container_path", None) or os.path.join(
+        cfg.data_dir, f"{cfg.project_name}.swim"
+    )
+
+
+def _query_etf_series(container: SwimContainer, path: str, fid: str) -> pd.Series | None:
+    try:
+        obs_df = container.query.dataframe(path, fields=[fid])
+    except KeyError:
+        return None
+    except Exception:
+        return None
+
+    if fid not in obs_df.columns:
+        return None
+
+    series = obs_df[fid]
+    if not series.notna().any():
+        return None
+
+    return series
+
+
+def _load_target_etf_series(
+    container: SwimContainer, cfg: ProjectConfig, fid: str
+) -> pd.Series | None:
+    mask = "no_mask" if getattr(cfg, "mask_mode", "none") == "none" else "irr"
+    instrument = getattr(cfg, "etf_target_instrument", "landsat")
+    etf_model = getattr(cfg, "etf_target_model", "ptjpl")
+
+    if etf_model == "ensemble":
+        direct_path = f"remote_sensing/etf/{instrument}/ensemble/{mask}"
+        direct_series = _query_etf_series(container, direct_path, fid)
+        if direct_series is not None:
+            return direct_series
+
+        member_names = list(getattr(cfg, "etf_ensemble_members", None) or [])
+        member_series = []
+        for model_name in member_names:
+            path = f"remote_sensing/etf/{instrument}/{model_name}/{mask}"
+            series = _query_etf_series(container, path, fid)
+            if series is not None:
+                member_series.append(series.rename(model_name))
+
+        if member_series:
+            return pd.concat(member_series, axis=1).mean(axis=1, skipna=True)
+
+        return None
+
+    path = f"remote_sensing/etf/{instrument}/{etf_model}/{mask}"
+    return _query_etf_series(container, path, fid)
+
+
+def _build_rs_eta_series(
+    container: SwimContainer, cfg: ProjectConfig, fid: str, etref: pd.Series
+) -> pd.Series | None:
+    """Build daily RS ETa from native ETf, linear interpolation, and ETo."""
+    etf_series = _load_target_etf_series(container, cfg, fid)
+    if etf_series is None:
+        return None
+
+    daily_etf = etf_series.reindex(etref.index).interpolate(method="linear")
+    rs_eta = daily_etf * etref.reindex(daily_etf.index)
+    if not rs_eta.notna().any():
+        return None
+
+    return rs_eta
 
 
 def parse_pest_params(par_csv, fids):
@@ -71,6 +152,76 @@ def parse_pest_params(par_csv, fids):
             params_by_fid[matched_fid][param_name] = float(row[col])
 
     return params_by_fid
+
+
+def _load_container_calibrated_params(
+    container: SwimContainer, fids: list[str]
+) -> dict[str, dict[str, float]]:
+    """Load ingested calibration parameters from the container for selected fields."""
+    from swimrs.container.components.ingestor import CALIBRATION_PARAMS
+
+    root = container._root
+    if "calibration/parameters" not in root:
+        return {}
+
+    missing_groups = [
+        param for param in CALIBRATION_PARAMS if f"calibration/parameters/{param}" not in root
+    ]
+    if missing_groups:
+        raise ValueError(
+            "Container calibration is incomplete; missing parameter groups: "
+            + ", ".join(sorted(missing_groups))
+        )
+
+    uid_to_idx = {uid: i for i, uid in enumerate(container.field_uids)}
+    calibrated_mask = None
+    if "calibration/metadata/calibrated" in root:
+        calibrated_mask = np.asarray(root["calibration/metadata/calibrated"][:]).astype(bool)
+
+    param_arrays = {
+        param: np.asarray(root[f"calibration/parameters/{param}"][:], dtype=float)
+        for param in CALIBRATION_PARAMS
+    }
+
+    params_by_fid = {}
+    for fid in fids:
+        idx = uid_to_idx.get(fid)
+        if idx is None:
+            continue
+        if calibrated_mask is not None and (
+            idx >= len(calibrated_mask) or not calibrated_mask[idx]
+        ):
+            continue
+
+        field_params = {}
+        missing_value = False
+        for param, arr in param_arrays.items():
+            if idx >= len(arr) or not np.isfinite(arr[idx]):
+                missing_value = True
+                break
+            field_params[param] = float(arr[idx])
+
+        if not missing_value:
+            params_by_fid[fid] = field_params
+
+    return params_by_fid
+
+
+def _resolve_calibrated_params(
+    container: SwimContainer, fids: list[str], par_csv: str | None = None
+) -> tuple[dict[str, dict[str, float]], str]:
+    """Resolve calibrated parameters from par.csv first, then container state."""
+    if par_csv is not None:
+        return parse_pest_params(par_csv, fids), str(par_csv)
+
+    params_by_fid = _load_container_calibrated_params(container, fids)
+    if not params_by_fid:
+        raise FileNotFoundError(
+            "No .par.csv found and container has no complete ingested calibration parameters "
+            "for the requested sites."
+        )
+
+    return params_by_fid, f"container calibration ({container.path})"
 
 
 def run_calibrated_model(cfg, container, fids, calibrated_params):
@@ -182,13 +333,17 @@ def find_par_csv(results_dir, project_name):
 
 
 def evaluate(cfg, container, par_csv, fids, results_dir=None):
-    """Run calibrated model and evaluate against flux tower ET.
+    """Run calibrated model and evaluate against flux and RS-derived daily ETa.
 
-    Returns DataFrame with per-site metrics.
+    The RS benchmark is the native target ETf, linearly interpolated to daily,
+    then multiplied by daily ETo. SWIM and RS ETa are both scored against flux
+    on identical paired days.
+
+    Returns DataFrame with per-site paired metrics.
     """
-    print(f"Evaluating {len(fids)} sites from {par_csv}")
+    calibrated_params, param_source = _resolve_calibrated_params(container, fids, par_csv)
+    print(f"Evaluating {len(fids)} sites from {param_source}")
 
-    calibrated_params = parse_pest_params(par_csv, fids)
     missing = [f for f in fids if f not in calibrated_params]
     if missing:
         print(f"WARNING: No calibrated params for: {missing} — skipping these sites")
@@ -199,12 +354,20 @@ def evaluate(cfg, container, par_csv, fids, results_dir=None):
 
     print("Running calibrated model...")
     model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
+    rs_eta_by_fid = {
+        fid: _build_rs_eta_series(container, cfg, fid, df["etref"])
+        for fid, df in model_results.items()
+    }
 
     # Write per-site CSVs for publication_figures.py
     if results_dir is not None:
         os.makedirs(results_dir, exist_ok=True)
         for fid, df in model_results.items():
-            df.to_csv(os.path.join(results_dir, f"{fid}.csv"))
+            out_df = df.copy()
+            rs_eta = rs_eta_by_fid.get(fid)
+            if rs_eta is not None:
+                out_df["et_rs"] = rs_eta.reindex(out_df.index)
+            out_df.to_csv(os.path.join(results_dir, f"{fid}.csv"))
 
     rows = []
     for fid in fids:
@@ -215,6 +378,10 @@ def evaluate(cfg, container, par_csv, fids, results_dir=None):
 
         model_df = model_results[fid]
         swim_et = model_df["et_act"]
+        rs_eta = rs_eta_by_fid.get(fid)
+        if rs_eta is None:
+            print(f"  {fid}: no RS ETa benchmark, skipping")
+            continue
 
         common = swim_et.index.intersection(flux_et.index)
         if len(common) < 10:
@@ -222,14 +389,29 @@ def evaluate(cfg, container, par_csv, fids, results_dir=None):
             continue
 
         obs = flux_et.loc[common].values
-        m = calc_metrics(obs, swim_et.loc[common].values)
+        swim_vals = swim_et.loc[common].values
+        rs_vals = rs_eta.reindex(common).values
+        paired_mask = np.isfinite(obs) & np.isfinite(swim_vals) & np.isfinite(rs_vals)
+        n_paired = int(paired_mask.sum())
 
-        row = {"fid": fid, **m}
+        if n_paired < 10:
+            print(f"  {fid}: only {n_paired} paired days with RS ETa benchmark, skipping")
+            continue
+
+        m_swim = calc_metrics(obs[paired_mask], swim_vals[paired_mask])
+        m_rs = calc_metrics(obs[paired_mask], rs_vals[paired_mask])
+
+        row = {"fid": fid, "n": n_paired}
+        for k in ["r2", "r", "rmse", "bias", "kge"]:
+            row[k] = m_swim[k]
+            row[f"{k}_swim"] = m_swim[k]
+            row[f"{k}_rs"] = m_rs[k]
         rows.append(row)
 
         print(
-            f"  {fid}: n={m['n']:>5d}  R2={m['r2']:.3f}  KGE={m['kge']:.3f}  "
-            f"RMSE={m['rmse']:.2f}  bias={m['bias']:.2f}"
+            f"  {fid}: n_paired={n_paired:>5d}  R2_swim={m_swim['r2']:.3f}  "
+            f"R2_rs={m_rs['r2']:.3f}  KGE_swim={m_swim['kge']:.3f}  "
+            f"KGE_rs={m_rs['kge']:.3f}"
         )
 
     if not rows:
@@ -237,25 +419,39 @@ def evaluate(cfg, container, par_csv, fids, results_dir=None):
         return pd.DataFrame()
 
     metrics_df = pd.DataFrame(rows).set_index("fid")
-
-    valid = metrics_df["r2"].notna()
-    vdf = metrics_df.loc[valid]
+    has_both = metrics_df["r2_swim"].notna() & metrics_df["r2_rs"].notna()
+    common_df = metrics_df.loc[has_both]
 
     print(f"\n{'=' * 70}")
-    print(f"DAILY AGGREGATE ({len(vdf)} sites)")
+    print(f"PAIRED DAILY AGGREGATE ({len(common_df)} sites)")
     print("=" * 70)
+    header = f"{'model':<8}"
     for stat in ["r2", "r", "rmse", "bias", "kge"]:
-        vals = vdf[stat].dropna()
-        print(f"  {stat:>6s}:  mean={vals.mean():.3f}  median={vals.median():.3f}")
+        header += f"  {stat + '_mean':>10}  {stat + '_med':>10}"
+    print(header)
+    print("-" * len(header))
+    for model_name in ["swim", "rs"]:
+        line = f"{model_name:<8}"
+        for stat in ["r2", "r", "rmse", "bias", "kge"]:
+            col = f"{stat}_{model_name}"
+            vals = common_df[col].dropna()
+            line += f"  {vals.mean():>10.3f}  {vals.median():>10.3f}"
+        print(line)
 
     # Worst / best
-    ranked = vdf.sort_values("kge")
-    print("\nWorst 10 (by KGE):")
+    ranked = common_df.sort_values("kge_swim")
+    print("\nWorst 10 (by SWIM KGE):")
     for fid, row in ranked.head(10).iterrows():
-        print(f"  {fid:<12} KGE={row['kge']:.3f}  R2={row['r2']:.3f}  RMSE={row['rmse']:.2f}")
-    print("\nBest 10 (by KGE):")
+        print(
+            f"  {fid:<12} KGE_swim={row['kge_swim']:.3f}  KGE_rs={row['kge_rs']:.3f}  "
+            f"R2_swim={row['r2_swim']:.3f}  R2_rs={row['r2_rs']:.3f}"
+        )
+    print("\nBest 10 (by SWIM KGE):")
     for fid, row in ranked.tail(10).iterrows():
-        print(f"  {fid:<12} KGE={row['kge']:.3f}  R2={row['r2']:.3f}  RMSE={row['rmse']:.2f}")
+        print(
+            f"  {fid:<12} KGE_swim={row['kge_swim']:.3f}  KGE_rs={row['kge_rs']:.3f}  "
+            f"R2_swim={row['r2_swim']:.3f}  R2_rs={row['r2_rs']:.3f}"
+        )
 
     # Write evaluation_summary.csv with 'site' column for publication_figures.py
     if results_dir is not None:
@@ -266,15 +462,16 @@ def evaluate(cfg, container, par_csv, fids, results_dir=None):
 
 
 def evaluate_etf(cfg, container, par_csv, fids, results_dir=None):
-    """Compare SWIM ETf against Landsat PT-JPL ETf at overpass dates.
+    """Compare SWIM ETf against the config-selected target ETf at overpass dates.
 
     Isolates ETf model skill from ETo bias: compares the calibrated Kcb curve
-    directly against the container's Landsat ETf observations on capture dates
-    only. Works for all sites (no tower data needed).
+    directly against the container ETf observations defined by the active config
+    (including ensemble or merged targets) on capture dates only. Works for all
+    sites without flux tower data.
     """
-    print(f"ETf evaluation: {len(fids)} sites from {par_csv}")
+    calibrated_params, param_source = _resolve_calibrated_params(container, fids, par_csv)
+    print(f"ETf evaluation: {len(fids)} sites from {param_source}")
 
-    calibrated_params = parse_pest_params(par_csv, fids)
     missing = [f for f in fids if f not in calibrated_params]
     if missing:
         print(f"WARNING: No calibrated params for: {missing} — skipping")
@@ -285,10 +482,6 @@ def evaluate_etf(cfg, container, par_csv, fids, results_dir=None):
     print("Running calibrated model...")
     model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
 
-    etf_model = getattr(cfg, "etf_target_model", "ptjpl")
-    mask = "no_mask" if getattr(cfg, "mask_mode", "none") == "none" else "irr"
-    etf_path = f"remote_sensing/etf/landsat/{etf_model}/{mask}"
-
     rows = []
     for fid in fids:
         if fid not in model_results:
@@ -296,13 +489,12 @@ def evaluate_etf(cfg, container, par_csv, fids, results_dir=None):
 
         swim_etf = model_results[fid]["etf_model"]
 
-        try:
-            obs_df = container.query.dataframe(etf_path, fields=[fid])
-        except KeyError:
-            print(f"  {fid}: no ETf in container")
+        obs_etf = _load_target_etf_series(container, cfg, fid)
+        if obs_etf is None:
+            print(f"  {fid}: no ETf in container for current config")
             continue
 
-        obs_etf = obs_df[fid].dropna()
+        obs_etf = obs_etf.dropna()
         common = swim_etf.index.intersection(obs_etf.index)
         if len(common) < 10:
             print(f"  {fid}: only {len(common)} overpass dates, skipping")
@@ -352,13 +544,17 @@ def evaluate_etf(cfg, container, par_csv, fids, results_dir=None):
 
 
 def evaluate_monthly(cfg, container, par_csv, fids):
-    """Monthly ET totals: SWIM vs flux tower.
+    """Monthly ET totals: SWIM and RS-derived ETa vs flux tower.
 
-    Returns DataFrame with per-site monthly metrics.
+    The RS benchmark is built from native target ETf, linearly interpolated to
+    daily, then multiplied by ETo before monthly aggregation. Both SWIM and RS
+    ETa are scored on identical paired months.
+
+    Returns DataFrame with per-site paired monthly metrics.
     """
-    print(f"Monthly evaluation: {len(fids)} sites from {par_csv}")
+    calibrated_params, param_source = _resolve_calibrated_params(container, fids, par_csv)
+    print(f"Monthly evaluation: {len(fids)} sites from {param_source}")
 
-    calibrated_params = parse_pest_params(par_csv, fids)
     missing = [f for f in fids if f not in calibrated_params]
     if missing:
         print(f"WARNING: No calibrated params for: {missing} — skipping these sites")
@@ -369,6 +565,10 @@ def evaluate_monthly(cfg, container, par_csv, fids):
 
     print("Running calibrated model...")
     model_results = run_calibrated_model(cfg, container, fids, calibrated_params)
+    rs_eta_by_fid = {
+        fid: _build_rs_eta_series(container, cfg, fid, df["etref"])
+        for fid, df in model_results.items()
+    }
 
     rows = []
     for fid in fids:
@@ -378,6 +578,10 @@ def evaluate_monthly(cfg, container, par_csv, fids):
 
         model_df = model_results[fid]
         swim_et = model_df["et_act"]
+        rs_eta = rs_eta_by_fid.get(fid)
+        if rs_eta is None:
+            print(f"  {fid}: no RS ETa benchmark, skipping")
+            continue
 
         daily_common = swim_et.index.intersection(flux_et.index)
         if len(daily_common) < 30:
@@ -386,30 +590,44 @@ def evaluate_monthly(cfg, container, par_csv, fids):
 
         swim_daily = swim_et.loc[daily_common]
         flux_daily = flux_et.loc[daily_common]
+        rs_daily = rs_eta.reindex(daily_common)
 
         swim_monthly = swim_daily.resample("MS").sum()
         flux_monthly = flux_daily.resample("MS").sum()
+        rs_monthly = rs_daily.resample("MS").sum()
 
         # Only keep months with >= 20 valid daily flux obs
         flux_count = flux_daily.resample("MS").count()
         valid_months = flux_count[flux_count >= 20].index
         swim_monthly = swim_monthly.loc[swim_monthly.index.isin(valid_months)]
         flux_monthly = flux_monthly.loc[flux_monthly.index.isin(valid_months)]
+        rs_monthly = rs_monthly.loc[rs_monthly.index.isin(valid_months)]
 
-        common = swim_monthly.index.intersection(flux_monthly.index)
-        if len(common) < 6:
-            print(f"  {fid}: only {len(common)} months, skipping")
+        all_idx = flux_monthly.index
+        rs_on_idx = rs_monthly.reindex(all_idx)
+        paired_mask = (
+            flux_monthly.notna() & swim_monthly.reindex(all_idx).notna() & rs_on_idx.notna()
+        )
+        paired_months = all_idx[paired_mask]
+        n_paired = len(paired_months)
+        if n_paired < 6:
+            print(f"  {fid}: only {n_paired} paired months, skipping")
             continue
 
-        obs = flux_monthly.loc[common].values
-        m = calc_metrics(obs, swim_monthly.loc[common].values)
+        obs = flux_monthly.loc[paired_months].values
+        m_swim = calc_metrics(obs, swim_monthly.reindex(paired_months).values)
+        m_rs = calc_metrics(obs, rs_on_idx.loc[paired_months].values)
 
-        row = {"fid": fid, **m}
+        row = {"fid": fid, "n": n_paired}
+        for k in ["r2", "r", "rmse", "bias", "kge"]:
+            row[k] = m_swim[k]
+            row[f"{k}_swim"] = m_swim[k]
+            row[f"{k}_rs"] = m_rs[k]
         rows.append(row)
 
         print(
-            f"  {fid}: n={m['n']:>3d} mo  R2={m['r2']:.3f}  KGE={m['kge']:.3f}  "
-            f"RMSE={m['rmse']:.1f}  bias={m['bias']:.1f}"
+            f"  {fid}: n_paired={n_paired:>3d} mo  R2_swim={m_swim['r2']:.3f}  "
+            f"R2_rs={m_rs['r2']:.3f}  KGE_swim={m_swim['kge']:.3f}  KGE_rs={m_rs['kge']:.3f}"
         )
 
     if not rows:
@@ -417,16 +635,24 @@ def evaluate_monthly(cfg, container, par_csv, fids):
         return pd.DataFrame()
 
     metrics_df = pd.DataFrame(rows).set_index("fid")
-
-    valid = metrics_df["r2"].notna()
-    vdf = metrics_df.loc[valid]
+    has_both = metrics_df["r2_swim"].notna() & metrics_df["r2_rs"].notna()
+    common_df = metrics_df.loc[has_both]
 
     print(f"\n{'=' * 70}")
-    print(f"MONTHLY AGGREGATE ({len(vdf)} sites)")
+    print(f"PAIRED MONTHLY AGGREGATE ({len(common_df)} sites)")
     print("=" * 70)
+    header = f"{'model':<8}"
     for stat in ["r2", "r", "rmse", "bias", "kge"]:
-        vals = vdf[stat].dropna()
-        print(f"  {stat:>6s}:  mean={vals.mean():.3f}  median={vals.median():.3f}")
+        header += f"  {stat + '_mean':>10}  {stat + '_med':>10}"
+    print(header)
+    print("-" * len(header))
+    for model_name in ["swim", "rs"]:
+        line = f"{model_name:<8}"
+        for stat in ["r2", "r", "rmse", "bias", "kge"]:
+            col = f"{stat}_{model_name}"
+            vals = common_df[col].dropna()
+            line += f"  {vals.mean():>10.3f}  {vals.median():>10.3f}"
+        print(line)
 
     return metrics_df
 
@@ -436,7 +662,16 @@ if __name__ == "__main__":
         description="Evaluate calibrated SWIM against flux tower ET (international)"
     )
     parser.add_argument(
-        "--par-csv", type=str, default=None, help="Override automatic par.csv discovery"
+        "--config",
+        type=str,
+        default=None,
+        help="Path to TOML config (default: 6_Flux_International.toml)",
+    )
+    parser.add_argument(
+        "--par-csv",
+        type=str,
+        default=None,
+        help="Override automatic par.csv discovery; otherwise fall back to ingested container calibration",
     )
     parser.add_argument(
         "--sites", type=str, default=None, help="Comma-separated site IDs (default: all)"
@@ -449,7 +684,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--etf",
         action="store_true",
-        help="Compare SWIM ETf against Landsat ETf at overpass dates",
+        help="Compare SWIM ETf against the config-selected target ETf at overpass dates",
     )
     parser.add_argument(
         "--container",
@@ -459,26 +694,30 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    cfg = _load_config()
-    results_dir = os.path.join(cfg.project_ws, "results")
+    conf_path = Path(args.config) if args.config else None
+    cfg = _load_config(conf_path)
+    results_dir = _results_dir(cfg, conf_path)
 
     if args.par_csv:
+        if not os.path.exists(args.par_csv):
+            raise FileNotFoundError(f"Provided --par-csv does not exist: {args.par_csv}")
         par_csv = args.par_csv
     else:
         # Search in master dir first, then results/group
         master_dir = os.path.join(cfg.pest_run_dir, "master")
         par_csv = find_par_csv(master_dir, cfg.project_name)
         if par_csv is None:
-            group_dir = os.path.join(results_dir, "group")
+            group_dir = _group_results_dir(cfg, conf_path)
             par_csv = find_par_csv(group_dir, cfg.project_name)
     if par_csv is None:
-        raise FileNotFoundError("No .par.csv found. Run calibration first or provide --par-csv.")
-    print(f"Using parameters: {par_csv}")
+        print("No .par.csv found; will use ingested container calibration if available.")
+    else:
+        print(f"Using parameters: {par_csv}")
 
     if args.container:
         container_path = args.container
     else:
-        container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
+        container_path = _default_container_path(cfg)
     container = SwimContainer.open(container_path, mode="r")
 
     if args.sites:

@@ -1,57 +1,82 @@
+"""Build publication-track shapefiles for Example 6.
+
+Provenance chain:
+    flux_crop_ag_96_150m.shp  (96 cropland flux sites, enriched with flux/LULC metadata)
+    └── flux_crop_pub_75_150m.shp  (75-site POR publication cohort)
+
+The 75-site cohort excludes 21 sites that lack post-2013 flux tower data,
+which is the minimum required for the OLI-era LS Ensemble and Triple ETf
+POR calibration experiments (2013-01-01 to 2025-12-31).
+
+Both publication TOMLs reference this shapefile:
+    - 6_Flux_International_LSEnsemble_POR.toml
+    - 6_Flux_International_TripleETf_POR.toml
+
+Usage:
+    python shapefile.py [--gis-dir PATH]
+"""
+
+import argparse
+from pathlib import Path
+
 import geopandas as gpd
-import pandas as pd
+
+# 21 sites excluded from the 96-site cropland cohort because they lack
+# any post-2013 flux tower data (required by the POR calibration window).
+EXCLUDED_NO_POST2013_FLUX = {
+    "CA-MA1",
+    "CA-MA2",
+    "CA-MA3",
+    "CH-Oe1",
+    "CN-Cng",
+    "DE-Seh",
+    "FI-Jok",
+    "IT-PT1",
+    "US-ARM",
+    "US-Bo1",
+    "US-Bo2",
+    "US-Br1",
+    "US-Br3",
+    "US-Dia",
+    "US-Dk1",
+    "US-KS2",
+    "US-Lin",
+    "US-Pon",
+    "US-SFP",
+    "US-SP2",
+    "US-Wi6",
+}
 
 
-def create_filtered_shapefiles():
-    """Filter flux sites and create point and buffer shapefiles.
+def build_pub75(gis_dir: Path) -> Path:
+    """Filter crop96 to the 75-site POR publication cohort."""
+    crop96_path = gis_dir / "flux_crop_ag_96_150m.shp"
+    out_path = gis_dir / "flux_crop_pub_75_150m.shp"
 
-    Filters: n_days > 60, end > 2021-01-01, (glc10_lc == 10.0 OR modis_lc == 12.0)
-    Outputs: points shapefile and 150m buffer shapefile
-    """
-    # Read the shapefile
-    gdf = gpd.read_file(
-        "/data/ssd2/swim/6_Flux_International/data/gis/flux_intl_28DEC2025.shp", engine="fiona"
+    gdf = gpd.read_file(crop96_path, engine="fiona")
+    assert "sid" in gdf.columns, f"Expected 'sid' column, got {list(gdf.columns)}"
+
+    pub = gdf[~gdf["sid"].isin(EXCLUDED_NO_POST2013_FLUX)].copy()
+
+    dropped = set(gdf["sid"]) - set(pub["sid"])
+    assert dropped == EXCLUDED_NO_POST2013_FLUX, (
+        f"Exclusion mismatch: expected {len(EXCLUDED_NO_POST2013_FLUX)} dropped, got {len(dropped)}"
     )
+    assert len(pub) == 75, f"Expected 75 sites, got {len(pub)}"
 
-    # Convert end to datetime if it's not already
-    gdf["end"] = pd.to_datetime(gdf["end"])
-
-    # Filter: n_days > 60, end > 2021-01-01, and (glc10_lc == 10.0 OR modis_lc == 12.0)
-    filtered = gdf[
-        (gdf["n_days"] > 60)
-        & (gdf["end"] > pd.Timestamp("2021-01-01"))
-        & ((gdf["glc10_lc"] == 10.0) | (gdf["modis_lc"] == 12.0))
-    ]
-
-    print(f"Original records: {len(gdf)}")
-    print(f"Filtered records: {len(filtered)}")
-    print("\nFiltered sites:")
-    print(filtered[["sid", "n_days", "end", "glc10_lc", "modis_lc", "lat", "lon"]])
-
-    # Create points from lat/lon
-    points = filtered.copy()
-    points["geometry"] = gpd.points_from_xy(points["lon"], points["lat"])
-    points = points.set_crs(epsg=4326)
-    points = points.drop(columns=["file"])
-
-    # Save points shapefile
-    out_dir = "/data/ssd2/swim/6_Flux_International/data/gis"
-    points.to_file(f"{out_dir}/flux_intl_points_06JAN2026.shp")
-    print(f"\nSaved points to {out_dir}/flux_intl_points_06JAN2026.shp")
-
-    # Create 150m buffers - need to project to a metric CRS first
-    # Use Web Mercator for global coverage
-    points_projected = points.to_crs(epsg=3857)
-    buffers = points_projected.copy()
-    buffers["geometry"] = buffers.geometry.buffer(150)
-
-    # Convert back to WGS84
-    buffers = buffers.to_crs(epsg=4326)
-
-    # Save buffers shapefile
-    buffers.to_file(f"{out_dir}/flux_intl_buffers_150m_06JAN2026.shp")
-    print(f"Saved 150m buffers to {out_dir}/flux_intl_buffers_150m_06JAN2026.shp")
+    pub.to_file(out_path, engine="fiona")
+    print(f"Wrote {len(pub)} sites to {out_path}")
+    return out_path
 
 
 if __name__ == "__main__":
-    create_filtered_shapefiles()
+    parser = argparse.ArgumentParser(description="Build Example 6 publication shapefiles")
+    default_gis = str(Path(__file__).resolve().parent / "data" / "gis")
+    parser.add_argument(
+        "--gis-dir",
+        type=str,
+        default=default_gis,
+        help="GIS directory containing flux_crop_ag_96_150m.shp (default: in-repo data/gis/)",
+    )
+    args = parser.parse_args()
+    build_pub75(Path(args.gis_dir))
