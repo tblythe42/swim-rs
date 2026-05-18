@@ -17,7 +17,7 @@ def _load_config(calibrate: bool = True, conf_path: Path | None = None) -> Proje
         conf_path = project_dir / "6_Flux_International.toml"
 
     cfg = ProjectConfig()
-    if os.path.isdir("/data/ssd2/swim"):
+    if os.path.isdir("/data/ssd1/swim"):
         cfg.read_config(str(conf_path), calibrate=calibrate)
     else:
         cfg.read_config(
@@ -49,28 +49,40 @@ def _site_ids(cfg: ProjectConfig, select: list[str] | None = None) -> list[str]:
     return ids
 
 
-def _export_calibration_artifacts(cfg: ProjectConfig, conf_path: Path | None = None) -> None:
-    """Export calibration report, parameter CSV, and metadata to the results dir."""
+def export_calibration_bundle(conf_path: Path | None = None) -> None:
+    """Export calibration report, parameter CSV, and batch metadata to results dir.
+
+    Must be run *after* batch_runner has ingested calibration into the container.
+    This is a standalone post-ingest step, not part of run_group_calibration(),
+    because PEST output must be ingested before the container has anything to export.
+    """
+    cfg = _load_config(calibrate=True, conf_path=conf_path)
     container_path = getattr(cfg, "container_path", None)
     if container_path is None:
         container_path = os.path.join(cfg.data_dir, f"{cfg.project_name}.swim")
     if not os.path.exists(container_path):
-        print(f"WARNING: container not found at {container_path}, skipping calibration export")
-        return
+        raise FileNotFoundError(f"Container not found at {container_path}")
 
     results_dir = _results_dir(cfg, conf_path)
     os.makedirs(results_dir, exist_ok=True)
 
+    # Calibration report and parameter CSV from ingested container state
     container = SwimContainer.open(container_path, mode="r")
     try:
         report = container.calibration_report(output_dir=results_dir)
         df = report.to_dataframe()
         df.to_csv(os.path.join(results_dir, "calibration_parameters.csv"), index=False)
-        print(f"Exported calibration artifacts ({len(df)} fields) to {results_dir}")
-    except ValueError as e:
-        print(f"WARNING: calibration export failed: {e}")
+        print(report.summary())
+        print(f"\nExported calibration artifacts ({len(df)} fields) to {results_dir}")
     finally:
         container.close()
+
+    # Copy batch metadata for provenance
+    for fname in ["run_manifest.json", "batch_log.json", "batch_manifest.csv"]:
+        src = os.path.join(cfg.pest_run_dir, fname)
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(results_dir, fname))
+            print(f"  Copied {fname}")
 
 
 def run_group_calibration(
@@ -174,18 +186,11 @@ def run_group_calibration(
     if spinup_src and os.path.exists(spinup_src):
         shutil.copyfile(spinup_src, os.path.join(out_dir, "spinup.json"))
 
-    # Copy batch metadata to results dir for provenance
-    results_dir = _results_dir(cfg, conf_path)
-    os.makedirs(results_dir, exist_ok=True)
-    for fname in ["run_manifest.json", "batch_log.json", "batch_manifest.csv"]:
-        src = os.path.join(cfg.pest_run_dir, fname)
-        if os.path.exists(src):
-            shutil.copyfile(src, os.path.join(results_dir, fname))
-
-    # Export calibration report artifacts from the container
-    _export_calibration_artifacts(cfg, conf_path)
-
     print(f"Wrote group calibration outputs to {out_dir}")
+    print(
+        "Next: ingest calibration into the container with batch_runner, "
+        "then run: calibrate_group.py --export-calibration"
+    )
 
 
 if __name__ == "__main__":
@@ -203,15 +208,25 @@ if __name__ == "__main__":
     parser.add_argument("--realizations", type=int, default=None, help="Override realizations")
     parser.add_argument("--overwrite", action="store_true", default=False, help="Wipe pest_run_dir")
     parser.add_argument("--pdc-remove", action="store_true", default=False, help="Run PDC removal")
+    parser.add_argument(
+        "--export-calibration",
+        action="store_true",
+        default=False,
+        help="Export calibration artifacts from an already-ingested container (post-ingest step)",
+    )
     args = parser.parse_args()
 
-    sites = [s.strip() for s in args.sites.split(",")] if args.sites else None
+    conf = Path(args.config) if args.config else None
 
-    run_group_calibration(
-        select_sites=sites,
-        workers=args.workers,
-        realizations=args.realizations,
-        overwrite=args.overwrite,
-        pdc_remove=args.pdc_remove,
-        conf_path=Path(args.config) if args.config else None,
-    )
+    if args.export_calibration:
+        export_calibration_bundle(conf_path=conf)
+    else:
+        sites = [s.strip() for s in args.sites.split(",")] if args.sites else None
+        run_group_calibration(
+            select_sites=sites,
+            workers=args.workers,
+            realizations=args.realizations,
+            overwrite=args.overwrite,
+            pdc_remove=args.pdc_remove,
+            conf_path=conf,
+        )
