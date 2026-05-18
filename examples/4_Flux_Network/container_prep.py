@@ -120,6 +120,10 @@ def create_project_container(cfg: ProjectConfig = None, overwrite: bool = False)
         print(f"Opening existing container: {container_path}")
         return open_container(container_path, mode="r+")
 
+    # Ensure the canonical shapefile exists before container creation so a
+    # fresh build does not depend on a stale pre-existing artifact.
+    build_shapefile(cfg, overwrite=overwrite)
+
     print(f"Creating new container: {container_path}")
     container = create_container(
         uri=container_path,
@@ -350,9 +354,6 @@ def prep_all(
     """
     if cfg is None:
         cfg = _load_config()
-
-    # Step 0: Rebuild shapefile from canonical repo data
-    build_shapefile(cfg, overwrite=overwrite)
 
     # Step 1: Ingest meteorology
     ingest_meteorology(container, cfg, overwrite=overwrite)

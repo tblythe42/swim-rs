@@ -148,6 +148,17 @@ def load_flux_et(fid, flux_dir):
     return pd.Series(dtype=float)
 
 
+def resolve_flux_dir(cfg):
+    """Resolve the canonical flux directory, with a shipped-data fallback."""
+    primary = os.path.join(cfg.data_dir, "daily_flux_files")
+    fallback = os.path.join(cfg.data_dir, "flux")
+    if os.path.isdir(primary):
+        return primary
+    if os.path.isdir(fallback):
+        return fallback
+    return primary
+
+
 def load_openet_etf_nomask(container, fid):
     """Load per-model ETf from the container using no_mask (unmasked) data.
 
@@ -661,6 +672,30 @@ def find_par_csv(results_dir, project_name):
     return None
 
 
+def find_reference_par_csv(results_dir, project_name):
+    """Resolve the canonical Example 5 parameter file when none is provided."""
+    candidate_dirs = []
+
+    run11_dir = os.path.join(results_dir, "run11_full_period")
+    if os.path.isdir(run11_dir):
+        candidate_dirs.append(run11_dir)
+
+    candidate_dirs.append(results_dir)
+
+    if os.path.isdir(results_dir):
+        for name in sorted(os.listdir(results_dir)):
+            path = os.path.join(results_dir, name)
+            if os.path.isdir(path) and path not in candidate_dirs:
+                candidate_dirs.append(path)
+
+    for directory in candidate_dirs:
+        par_csv = find_par_csv(directory, project_name)
+        if par_csv is not None:
+            return par_csv
+
+    return None
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Evaluate calibrated SWIM against flux tower ET and OpenET models"
@@ -697,13 +732,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = load_config()
-    flux_dir = os.path.join(cfg.data_dir, "daily_flux_files")
+    flux_dir = resolve_flux_dir(cfg)
     results_dir = os.path.join(cfg.project_ws, "results")
 
     if args.par_csv:
         par_csv = args.par_csv
     else:
-        par_csv = find_par_csv(results_dir, cfg.project_name)
+        par_csv = find_reference_par_csv(results_dir, cfg.project_name)
     if par_csv is None:
         raise FileNotFoundError(f"No .par.csv found in {results_dir}")
     print(f"Using parameters: {par_csv}")

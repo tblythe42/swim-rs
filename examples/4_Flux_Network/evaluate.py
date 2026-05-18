@@ -84,6 +84,8 @@ def parse_pest_params(par_csv, fids):
 
 def run_calibrated_model(cfg, container, fids, calibrated_params):
     """Run model with calibrated parameters. Returns {fid: DataFrame}."""
+    refet_type = (getattr(cfg, "refet_type", "eto") or "eto").lower()
+
     with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
         temp_h5 = tmp.name
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as tmp:
@@ -97,7 +99,7 @@ def run_calibrated_model(cfg, container, fids, calibrated_params):
             calibrated_params_path=params_json,
             start_date=cfg.start_dt,
             end_date=cfg.end_dt,
-            refet_type=getattr(cfg, "refet_type", "eto") or "eto",
+            refet_type=refet_type,
             fields=fids,
             empirical_kc_max=True,
             mask_mode=getattr(cfg, "mask_mode", "irrigation"),
@@ -105,7 +107,7 @@ def run_calibrated_model(cfg, container, fids, calibrated_params):
 
         output, _ = run_daily_loop_fast(swim_input)
         dates = pd.date_range(swim_input.start_date, periods=swim_input.n_days, freq="D")
-        etr = swim_input.get_time_series("etr")
+        etref = swim_input.get_time_series(refet_type)
 
         results = {}
         for i, fid in enumerate(swim_input.fids):
@@ -113,7 +115,7 @@ def run_calibrated_model(cfg, container, fids, calibrated_params):
                 {
                     "et_act": output.eta[:, i],
                     "etf_model": output.etf[:, i],
-                    "etref": etr[:, i],
+                    "etref": etref[:, i],
                     "swe": output.swe[:, i],
                 },
                 index=dates,
