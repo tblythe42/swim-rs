@@ -365,7 +365,7 @@ class SwimContainer:
 
         # Create storage provider for write mode
         provider = StorageProviderFactory.from_uri(
-            uri_str, mode="w", storage=storage, **storage_kwargs
+            uri, mode="w", storage=storage, **storage_kwargs
         )
 
         # Check for existing container (only relevant if overwrite=False)
