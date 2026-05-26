@@ -56,9 +56,6 @@ properties_json = "{properties_dir}/{project}_properties.json"
 [paths.snow]
 snodas_in = "{paths.data}/snow/snodas/extracts"  # SNODAS extracts (optional if no snow)
 
-[paths.outputs]
-prepped_input = "{paths.data}/prepped_input.json"
-
 [earth_engine]
 bucket = "wudr"  # only needed for EE bucket exports; drive exports don’t require this
 

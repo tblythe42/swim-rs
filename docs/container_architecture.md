@@ -71,9 +71,10 @@ multiple instruments (`merged_ndvi()`), fusing NDVI time series
 ### Exporter (`container.export`)
 
 Exports container data to formats needed by downstream tools. Key method
-`prepped_input_json()` produces the JSON file consumed by the process
-package. Also supports CSV exports, shapefiles, and direct conversion to
-xarray Datasets or pandas DataFrames.
+`observations()` produces per-field observation files for PEST++ calibration.
+Also supports CSV exports, shapefiles, and direct conversion to
+xarray Datasets or pandas DataFrames. Model-ready HDF5 input is built via
+`build_swim_input()` in the process package.
 
 ### Query (`container.query`)
 
@@ -128,8 +129,8 @@ flowchart TB
     end
 
     subgraph Outputs["Model Outputs"]
-        JSON["prepped_input.json"]
-        HDF5["project.h5<br/>(process package)"]
+        HDF5["swim_input.h5<br/>(process package)"]
+        OBS["obs_etf_*.np / obs_swe_*.np<br/>(PEST++ observations)"]
         CSV["CSV exports"]
         XR["xarray.Dataset"]
     end
@@ -156,8 +157,8 @@ flowchart TB
     State --> Query
     State --> Export
 
-    Export --> JSON
     Export --> HDF5
+    Export --> OBS
     Export --> CSV
     Query --> XR
 ```
@@ -227,13 +228,12 @@ classDiagram
     }
 
     class Exporter {
-        +prepped_input_json(output_path)
+        +observations(output_dir)
         +shapefile(output_path)
         +csv(output_path, variables)
         +model_inputs(output_dir)
         +to_xarray(variables)
         +to_dataframe(variables)
-        +observations(output_path)
     }
 
     class Query {
@@ -409,11 +409,11 @@ sequenceDiagram
     Ca->>S: Write derived/dynamics
     Ca->>P: Record compute event
 
-    U->>E: prepped_input_json(output_path)
+    U->>E: observations(output_dir)
     E->>S: Read all required data
-    E->>E: Build JSON structure
+    E->>E: Write per-field obs files
     E->>P: Record export event
-    E-->>U: prepped_input.json
+    E-->>U: obs_etf_*.np, obs_swe_*.np
 
     U->>C: save()
     C->>S: Flush to storage

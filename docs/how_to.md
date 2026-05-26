@@ -300,7 +300,7 @@ This:
 1. Creates `data/my_project.swim` (Zarr-based container)
 2. Ingests all extracted data with provenance tracking
 3. Computes merged NDVI and crop dynamics
-4. Exports model-ready inputs (`prepped_input.json`, `swim_input.h5`)
+4. Exports model-ready inputs (`swim_input.h5`)
 
 ### Prep options
 

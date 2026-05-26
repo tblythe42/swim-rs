@@ -41,7 +41,7 @@ swim extract path/to/project.toml \
 ```
 Outputs: EE exports (Drive or bucket), GridMET parquet, properties extracts.
 
-## Prep (Container ingest → prepped_input.json)
+## Prep (Container ingest → swim_input.h5)
 ```
 swim prep path/to/project.toml \
   --add-sentinel            # ingest Sentinel-2 NDVI if available
@@ -51,7 +51,7 @@ swim prep path/to/project.toml \
   --international           # alias for LULC mode with no-mask NDVI/ETf
   --no-ndvi --no-etf --no-met --no-snow  # skip parts as needed
 ```
-Does: create/open the `.swim` container, ingest properties/NDVI/ETf/met/SNODAS, compute merged NDVI and dynamics, and export model-ready inputs (HDF5/JSON).
+Does: create/open the `.swim` container, ingest properties/NDVI/ETf/met/SNODAS, compute merged NDVI and dynamics, and export model-ready inputs (HDF5).
 
 ## Calibrate (PEST++ IES)
 ```
