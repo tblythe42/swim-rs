@@ -524,7 +524,7 @@ class SwimContainer:
         print(f"Created container: {provider.uri} ({n_fields} fields, {n_days} days)")
 
         # Reopen in append mode for continued use
-        return cls.open(uri_str, mode="r+", **storage_kwargs)
+        return cls.open(provider.location, mode="r+", **storage_kwargs)
 
     def close(self):
         """Close the container and release resources."""

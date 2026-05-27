@@ -119,7 +119,7 @@ class StorageProviderFactory:
 
         elif (len(scheme) == 1) & (scheme.isalpha()):
             # Windows File Path
-            path = Path(uri_str)
+            path = Path(uri)
             return cls._from_local_path(path, mode, storage=storage, **kwargs)
 
         elif scheme == "file":

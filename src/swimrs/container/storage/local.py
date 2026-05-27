@@ -75,7 +75,7 @@ class ZipStoreProvider(StorageProvider):
         if self._path.exists():
             self._path.unlink()
         # Also remove lock file if present
-        lock_path = Path(str(self._path) + ".lock")
+        lock_path = Path(self._path.as_posix() + ".lock")
         if lock_path.exists():
             lock_path.unlink()
 
@@ -94,7 +94,7 @@ class ZipStoreProvider(StorageProvider):
 
         # Acquire file lock for write modes
         if self._mode in ("r+", "a", "w"):
-            lock_path = str(self._path) + ".lock"
+            lock_path = self._path.as_posix() + ".lock"
             self._lock = FileLock(lock_path, timeout=3)
             try:
                 self._lock.acquire()
@@ -125,7 +125,7 @@ class ZipStoreProvider(StorageProvider):
         else:
             zarr_mode = self._mode
 
-        self._store = zarr.storage.ZipStore(str(self._path), mode=zarr_mode)
+        self._store = zarr.storage.ZipStore(self._path.as_posix(), mode=zarr_mode)
         self._root = zarr.open_group(self._store, mode="a" if zarr_mode != "r" else "r")
 
         return self._root
@@ -209,7 +209,7 @@ class DirectoryStoreProvider(StorageProvider):
         if self._path.exists():
             shutil.rmtree(self._path)
         # Also remove lock file if present
-        lock_path = Path(str(self._path) + ".lock")
+        lock_path = Path(self._path.as_posix() + ".lock")
         if lock_path.exists():
             lock_path.unlink()
 
@@ -228,7 +228,7 @@ class DirectoryStoreProvider(StorageProvider):
 
         # Acquire file lock for write modes
         if self._mode in ("r+", "a", "w"):
-            lock_path = str(self._path) + ".lock"
+            lock_path = self._path.as_posix() + ".lock"
             self._lock = FileLock(lock_path, timeout=3)
             try:
                 self._lock.acquire()
@@ -249,7 +249,7 @@ class DirectoryStoreProvider(StorageProvider):
             zarr_mode = self._mode
 
         # Use LocalStore (zarr 3.x) for uncompressed directory access
-        self._store = zarr.storage.LocalStore(str(self._path))
+        self._store = zarr.storage.LocalStore(self._path.as_posix())
         self._root = zarr.open_group(self._store, mode=zarr_mode)
 
         return self._root
